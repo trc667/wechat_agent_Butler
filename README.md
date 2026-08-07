@@ -19,6 +19,7 @@
 - **每日晨报**：每天早上定时推送「问候 + 今日待办 + 备忘 + 天气」到微信
 - **天气查询**：说「今天天气」「上海天气」直接答（wttr.in 免费接口，无需 key）
 - **语音消息**：微信内置 ASR 自动转文字，直接对管家发语音也能聊
+- **图片识别**：发图让管家「看图说话」（阿里云百炼 qwen-vl-plus，可选；配置 DASHSCOPE_API_KEY 后启用）
 - **技术问答**：程序员向的简洁专业回复（先说结论，再给命令/步骤/示例）
 - **长期记忆**：每 N 轮对话自动提炼用户事实（结构化 JSON 提取、相似度去重、50 条滚动保留），重启不丢
 - **防 AI 腔**：回复物理过滤 emoji / 表情符号 / 波浪号
@@ -77,7 +78,19 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 - 晨报内容：问候 + 今日待办 + 备忘条数 + 天气
 - 天气默认城市：`config.json` → `weather_city`（默认北京）
 
-> 系统环境变量注入企微密钥时也可走企微 App 推送兜底（已弃用，一般用不上）。
+### （可选）开启图片识别
+
+微信发图 → 管家自动识图回复描述（用阿里云百炼 qwen-vl-plus，DeepSeek 无原生视觉）：
+
+1. 阿里云控制台 → 百炼（Model Studio）→ API-KEY 管理，拿 API Key
+2. 填入 `.env`：
+   ```bash
+   DASHSCOPE_API_KEY=sk-xxx
+   DASHSCOPE_MODEL=qwen-vl-plus
+   ```
+3. 重启生效。不配置则发图只提示「没看清」（不报错）
+
+> 图片传输走微信 CDN（AES-128-ECB 加密），实现对齐腾讯官方 openclaw-weixin。
 
 ### 2. 登录并启动
 
@@ -112,6 +125,7 @@ python -u ilink_bot.py
 | 我有哪些待办 | 列出未完成待办 |
 | 完成了交房租 | 划掉该待办 |
 | （直接发语音） | 自动转文字并回复 |
+| 发一张图片 | 自动识图描述内容（需配置百炼 key） |
 | 今天天气 / 上海天气 | 查天气直接答（默认城市可在 config 改） |
 | 待办到期 / 每日晨报 | 自动推送到你的微信 |
 
@@ -138,6 +152,8 @@ CI 已配置 GitHub Actions，push/PR 自动跑测试（Python 3.8 / 3.11 双版
 ├── memory.py           # 长期记忆（memory.json）+ 聊天流水（history.jsonl）+ 记忆提炼
 ├── deepseek.py         # DeepSeek API 封装（指数退避重试）
 ├── weather.py          # 天气查询（wttr.in 免费接口，无需 key）
+├── vision.py           # 多模态识图（阿里云百炼 qwen-vl-plus）
+├── media.py            # 微信媒体下载解密（CDN AES-128-ECB）
 ├── config.py           # 配置加载（config.json + .env）
 ├── tests/              # pytest 单元测试
 ├── config.example.json # 配置模板（真实配置用 config.json，不入库）

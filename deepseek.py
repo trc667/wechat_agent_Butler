@@ -6,6 +6,9 @@ import requests
 
 from config import load_config
 
+# 国内服务走直连，显式禁用系统代理（避免被本地代理软件劫持）
+_NO_PROXY = {"http": None, "https": None}
+
 
 class DeepSeekError(Exception):
     pass
@@ -40,7 +43,8 @@ class DeepSeek:
 
         for attempt in range(max_retries + 1):
             try:
-                resp = requests.post(url, headers=headers, json=payload, timeout=90)
+                resp = requests.post(url, headers=headers, json=payload, timeout=90,
+                                     proxies=_NO_PROXY)
                 if resp.status_code == 401:
                     raise DeepSeekError(
                         "API key 无效（401），请到 DeepSeek 开放平台检查 deepseek_api_key"

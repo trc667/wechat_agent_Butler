@@ -7,6 +7,9 @@
 
 import requests
 
+# 国内服务走直连，显式禁用系统代理（避免被本地代理软件劫持）
+_NO_PROXY = {"http": None, "https": None}
+
 _WTTR = "https://wttr.in/%s?format=j1&lang=zh"
 
 # 容易误当城市名的词（"今天天气"里"今天"不是城市）
@@ -52,7 +55,7 @@ def parse_weather(data, city):
 def fetch_weather(city="北京", timeout=10):
     """查城市当前+今日天气。网络失败/解析失败返回 None（调用方降级）。"""
     try:
-        r = requests.get(_WTTR % city, timeout=timeout)
+        r = requests.get(_WTTR % city, timeout=timeout, proxies=_NO_PROXY)
         r.raise_for_status()
         return parse_weather(r.json(), city)
     except Exception:

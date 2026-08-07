@@ -18,14 +18,21 @@ import os
 import random
 import sys
 import time
+from collections import deque
 
 import requests
+
+from media import download_image
 
 BASE = "https://ilinkai.weixin.qq.com"
 CHANNEL_VERSION = "1.0.2"
 CRED_FILE = os.path.join("data", "ilink_cred.json")
 CURSOR_FILE = os.path.join("data", "ilink_cursor.txt")
 TOKENS_FILE = os.path.join("data", "ilink_tokens.json")  # user -> 最近 context_token（主动推送用）
+
+# 微信/DeepSeek 等国内服务走直连：显式禁用代理，避免被本地代理软件
+# （魔戒/Clash 设置的系统代理）劫持导致 ProxyError
+NO_PROXY = {"http": None, "https": None}
 
 
 class ILinkError(Exception):
@@ -74,7 +81,7 @@ class ILinkClient:
         """交互式登录：显示二维码（浏览器链接 + 尽量打印 ASCII 码），轮询扫码状态。"""
         try:
             r = requests.get(self.base + "/ilink/bot/get_bot_qrcode",
-                             params={"bot_type": "3"}, timeout=10)
+                             params={"bot_type": "3"}, timeout=10, proxies=NO_PROXY)
             data = r.json()
         except Exception as e:
             raise ILinkError("请求登录二维码失败: %s" % e)
@@ -112,7 +119,8 @@ class ILinkClient:
             time.sleep(2)
             try:
                 s = requests.get(self.base + "/ilink/bot/get_qrcode_status",
-                                 params={"qrcode": qrcode_id}, timeout=10).json()
+                                 params={"qrcode": qrcode_id}, timeout=10,
+                                 proxies=NO_PROXY).json()
             except Exception as e:
                 print("[重试] 查询扫码状态失败: %s" % e)
                 continue
@@ -153,7 +161,7 @@ class ILinkClient:
 
     def _post(self, path, payload, timeout=30):
         r = requests.post(self.base + path, json=payload,
-                          headers=self._headers(), timeout=timeout)
+                          headers=self._headers(), timeout=timeout, proxies=NO_PROXY)
         if r.status_code != 200:
             raise ILinkError("%s HTTP %d: %s" % (path, r.status_code, r.text[:200]))
         try:
@@ -212,8 +220,9 @@ class ILinkClient:
         self._save_cursor(buf)
         return data.get("msgs") or []
 
-    def update_loop(self, on_message):
-        """长轮询循环。on_message(sender, text) 在收到一条文本消息时被调用。"""
+    def update_loop(self, on_message, on_image=None):
+        """长轮询循环。on_message(sender, text) 收到文本时调用；
+        on_image(sender, image_bytes) 收到图片时调用（可空）。"""
         while True:
             try:
                 msgs = self.get_updates()
@@ -243,15 +252,22 @@ class ILinkClient:
                 time.sleep(2)
                 continue
 
+            seen_msgs = deque(maxlen=50)  # 最近 50 条消息 id：防游标重放导致重复处理
             for m in msgs:
                 if m.get("message_type") != 1:   # 1=用户消息，2=机器人
                     continue
+                msg_id = m.get("msg_id") or ""
+                if msg_id:
+                    if msg_id in seen_msgs:
+                        continue  # 同一条消息重放，跳过
+                    seen_msgs.append(msg_id)
                 sender = m.get("from_user_id") or ""
                 if not sender:
                     continue
                 self._context_tokens[sender] = m.get("context_token") or ""
                 self._save_tokens()
                 texts = []
+                image_done = False  # 一条消息只处理第一张图，避免多 item 重复回复
                 for item in m.get("item_list") or []:
                     if item.get("type") == 1:    # 1=文本
                         ti = item.get("text_item") or {}
@@ -265,6 +281,16 @@ class ILinkClient:
                         else:
                             print("[日志] 收到语音但无转写文本（原样打印 item 便于排查）：")
                             print("  " + json.dumps(item, ensure_ascii=False)[:300])
+                    elif item.get("type") == 2:  # 2=图片（CDN AES-128-ECB 加密，需下载解密）
+                        if on_image is None or image_done:
+                            continue
+                        image_done = True
+                        img = download_image(item.get("image_item") or {})
+                        if img:
+                            on_image(sender, img)
+                        else:
+                            print("[日志] 图片下载/解密失败（原样打印 item 便于排查）：")
+                            print("  " + json.dumps(item, ensure_ascii=False)[:400])
                 if texts:
                     on_message(sender, "\n".join(texts))
 

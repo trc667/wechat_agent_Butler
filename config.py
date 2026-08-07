@@ -22,6 +22,9 @@ DEFAULTS = {
     "history_keep": 12,
     "memory_extract_every": 5,
     "weather_city": "北京",   # 天气查询的默认城市（说「今天天气」时用）
+    "dashscope_api_key": "",   # 识图（阿里云百炼 qwen-vl-plus，.env 的 DASHSCOPE_API_KEY）
+    "dashscope_model": "qwen-vl-plus",
+    "dashscope_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "daily_greeting": {
         "enabled": True,
         "time": "09:00",
@@ -98,6 +101,13 @@ def load_config(force=False):
         val = env.get(env_name) or os.environ.get(env_name)
         if val:
             cfg["wecom"][key] = val
+    # 识图（阿里云百炼）密钥/模型同样支持 .env / 环境变量
+    for key, env_name in (("dashscope_api_key", "DASHSCOPE_API_KEY"),
+                          ("dashscope_model", "DASHSCOPE_MODEL"),
+                          ("dashscope_base_url", "DASHSCOPE_BASE_URL")):
+        val = env.get(env_name) or os.environ.get(env_name)
+        if val:
+            cfg[key] = val
     _cached = cfg
     return cfg
 

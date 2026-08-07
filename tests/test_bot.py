@@ -75,3 +75,35 @@ def test_weather_route_not_triggered_without_keyword(monkeypatch):
                   send=lambda s, t: sent.append((s, t)))
     handled, _ = b._try_weather("你好呀")
     assert handled is False
+
+
+def test_image_worker_uses_context(monkeypatch):
+    """识图 prompt 应带上最近对话/记忆/备忘录（与已有能力联动）。"""
+    from bot import XiaoQiBot
+
+    class FakeMemCtx:
+        def text(self):
+            return "用户是程序员"
+
+        def recent_history(self, n):
+            return [{"role": "user", "content": "这是测试环境地址"}]
+
+        def append_history(self, role, content):
+            pass
+
+    sent = []
+    captured = {}
+
+    def fake_describe(image_bytes, prompt=None):
+        captured["prompt"] = prompt
+        return "这是一张截图。"
+
+    monkeypatch.setattr("vision.describe_image", fake_describe)
+    b = XiaoQiBot(None, FakeMemCtx(),
+                  {"min_reply_interval": 0, "dashscope_api_key": "sk-x"},
+                  send=lambda s, t: sent.append((s, t)))
+    b._image_worker("wxid", b"\xff\xd8\xff" + b"x" * 50)
+    assert len(sent) == 1 and "截图" in sent[0][1]
+    assert "最近对话" in captured["prompt"]
+    assert "用户是程序员" in captured["prompt"]
+    assert "备忘录" in captured["prompt"]

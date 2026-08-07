@@ -92,6 +92,70 @@ class XiaoQiBot:
         self.mem.append_history("user", text)
         threading.Thread(target=self._reply_worker, args=(sender, text), daemon=True).start()
 
+    def on_image(self, sender, image_bytes):
+        """收到一张图片：下载解密后交给 DeepSeek 识图回复。"""
+        self._last_sender = sender
+        self.mem.append_history("user", "[图片]")
+        threading.Thread(target=self._image_worker, args=(sender, image_bytes),
+                         daemon=True).start()
+
+    def _image_worker(self, sender, image_bytes):
+        """识图：结合对话历史/记忆/备忘录，用管家口吻回复（优先百炼视觉模型）。"""
+        self._rate_limit()
+        from vision import describe_image
+        # 组装上下文：最近对话 + 长期记忆 + 备忘录（让识图回复“像管家”、能结合已有信息）
+        ctx = []
+        try:
+            hist = self.mem.recent_history(6)
+            if hist:
+                lines = ["%s：%s" % ("用户" if h["role"] == "user" else "管家",
+                                     str(h["content"])[:80]) for h in hist]
+                ctx.append("最近对话：\n" + "\n".join(lines))
+            mem_text = self.mem.text()
+            if mem_text:
+                ctx.append("你记住的关于用户的事：\n" + mem_text[:300])
+            if self.mgr.data.get("memos"):
+                ctx.append("用户备忘录有 %d 条（需要时再提，不要主动全列）"
+                           % len(self.mgr.data["memos"]))
+        except Exception:
+            pass
+        prompt = (
+            "用户在微信发来一张图片，请像他的私人管家一样用中文简短描述图片内容"
+            "（两三句以内），不要 emoji，不要说教。如果图片像是要你记住的信息"
+            "（地址/账号/配置/待办清单等），结尾自然地问一句要不要记住。\n\n"
+            + "\n\n".join(ctx))
+        reply = None
+        # 1) 百炼视觉模型（配置了才可用）
+        if self.cfg.get("dashscope_api_key"):
+            try:
+                reply = describe_image(image_bytes, prompt=prompt)
+            except Exception as e:
+                print("[错误] 识图失败(百炼): %s" % e)
+        # 2) 回退 DeepSeek 多模态（可能不支持，失败给兑底文案）
+        if not reply:
+            import base64
+            from media import guess_image_mime
+            try:
+                mime = guess_image_mime(image_bytes)
+                b64 = base64.b64encode(image_bytes).decode("ascii")
+                msgs = [{"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url",
+                     "image_url": {"url": "data:%s;base64,%s" % (mime, b64)}},
+                ]}]
+                reply = self.ds.chat(msgs)
+                if not reply:
+                    raise DeepSeekError("模型返回空回复")
+            except DeepSeekError as e:
+                print("[错误] 识图失败: %s" % e)
+            except Exception as e:
+                print("[错误] 识图异常: %s" % e)
+        if not reply:
+            reply = "图我收到了，但暂时没看清，稍后再试试"
+        reply = strip_emoji(reply)
+        self._send(sender, reply)
+        self.mem.append_history("assistant", reply)
+
     # ---------- 回复工作线程 ----------
 
     def _reply_worker(self, sender, text):

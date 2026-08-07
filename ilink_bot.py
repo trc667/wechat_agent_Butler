@@ -9,6 +9,7 @@
 说明：官方通道只能回复、不能主动发消息，所以定时任务在这个模式不生效。
 """
 
+import os
 import sys
 import time
 
@@ -17,6 +18,12 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, OSError):
         pass
+
+# 清除系统代理环境变量：微信/DeepSeek/天气都走直连，避免被本地代理软件
+# （如魔戒/Clash）劫持导致 ProxyError。代理只给 git/浏览器等外部工具用。
+for _var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+             "ALL_PROXY", "all_proxy"):
+    os.environ.pop(_var, None)
 
 from config import load_config, api_key_valid
 from deepseek import DeepSeek
@@ -76,7 +83,7 @@ def main():
         bot.on_text(sender, text)
 
     try:
-        client.update_loop(on_message)
+        client.update_loop(on_message, on_image=bot.on_image)
     except KeyboardInterrupt:
         print("\n管家已下线")
 
