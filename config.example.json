@@ -1,0 +1,29 @@
+{
+  "deepseek_api_key": "",
+  "base_url": "https://api.deepseek.com",
+  "model": "deepseek-v4-flash",
+  "max_tokens": 1024,
+  "temperature": 0.8,
+  "allow_list": [],
+  "admin_userid": "",
+  "min_reply_interval": 3,
+  "history_keep": 12,
+  "memory_extract_every": 5,
+  "weather_city": "北京",
+  "daily_greeting": {
+    "enabled": true,
+    "time": "09:00",
+    "text": "早安宝贝～今天也要元气满满哦 ☀️"
+  },
+  "wecom": {
+    "corpid": "",
+    "agentid": "",
+    "secret": "",
+    "token": "",
+    "encoding_aes_key": "",
+    "mode": "safe",
+    "callback_port": 9000,
+    "callback_path": "/wechat/callback",
+    "api_base": "https://qyapi.weixin.qq.com/cgi-bin"
+  }
+}

@@ -1,0 +1,32 @@
+# ===== 密钥与本地配置（绝不入库） =====
+.env
+config.json
+!config.example.json
+
+# ===== 数据（登录凭据 / 聊天记录 / 记忆 / 导入文件） =====
+data/
+
+# ===== 日志 =====
+logs/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ===== 个人笔记（如需公开请删除以下行） =====
+摘要.md
+改造.txt
+简历项目.md
+
+# ===== IDE / 编辑器 =====
+.claude/
+.idea/
+.vscode/
+*.swp
+
+# ===== 系统 =====
+Thumbs.db
+Desktop.ini
