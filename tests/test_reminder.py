@@ -80,6 +80,26 @@ def test_done_or_no_due_skipped(tmp_path):
     assert rm.check_due_todos(datetime.datetime(2026, 8, 6)) == 0
 
 
+def test_multiple_due_todos_merged(tmp_path):
+    """多条待办同时到期 → 合并成一条提醒，防刷屏。"""
+    due = [
+        {"text": "交房租", "due": "2026-08-05", "done": False, "reminded": False},
+        {"text": "交周报", "due": "2026-08-06", "done": False, "reminded": False},
+        {"text": "买牛奶", "due": "2026-08-06", "done": False, "reminded": False},
+    ]
+    rm, mgr = _make_rm(tmp_path, push=FakePush(), due=due)
+    assert rm.check_due_todos(datetime.datetime(2026, 8, 6)) == 3
+    assert len(rm._push_fn.sent) == 1  # 只发一条
+    text = rm._push_fn.sent[0]
+    assert "3 条待办到期" in text
+    assert "交房租（2026-08-05）" in text
+    assert "交周报（今天）" in text
+    assert "买牛奶（今天）" in text
+    assert all(t["reminded"] for t in mgr.data["todos"])
+    # 再次检查不重复提醒
+    assert rm.check_due_todos(datetime.datetime(2026, 8, 6)) == 0
+
+
 # ---------- 晨报 ----------
 
 def test_digest_with_due_today(tmp_path):
@@ -170,3 +190,43 @@ def test_digest_weather_failure_keeps_digest(tmp_path):
     rm._weather_fn = lambda: None  # 天气查不到
     assert rm.maybe_send_digest(datetime.datetime(2026, 8, 6, 9, 0)) is True  # 晨报照常发
     assert "早安" in rm._push_fn.sent[0]
+
+
+# ---------- 节日 / 重要日子 ----------
+
+def test_day_note_fixed_holiday(tmp_path):
+    rm, _ = _make_rm(tmp_path, push=FakePush(), due=[])
+    assert rm._day_note(datetime.datetime(2026, 10, 1)) == "今天是国庆节"
+    assert rm._day_note(datetime.datetime(2026, 9, 30), delta=1) == "明天是国庆节"
+
+
+def test_day_note_important_date(tmp_path):
+    class FakeMemory:
+        data = {"important_dates": [{"date": "08-15", "event": "宝贝生日"}]}
+
+    rm, _ = _make_rm(tmp_path, push=FakePush(), due=[])
+    rm.memory = FakeMemory()
+    assert rm._day_note(datetime.datetime(2026, 8, 15)) == "今天是宝贝生日"
+    assert rm._day_note(datetime.datetime(2026, 8, 14), delta=1) == "明天是宝贝生日"
+
+
+def test_day_note_empty(tmp_path):
+    rm, _ = _make_rm(tmp_path, push=FakePush(), due=[])
+    assert rm._day_note(datetime.datetime(2026, 8, 10)) == ""  # 普通日子
+    assert rm._day_note(datetime.datetime(2026, 8, 10), delta=1) == ""
+
+
+def test_digest_includes_holiday(tmp_path):
+    rm, _ = _make_rm(tmp_path, push=FakePush(), due=[])
+    text = rm.build_digest(datetime.datetime(2026, 10, 1, 8, 0))
+    assert "国庆节" in text
+
+
+def test_digest_includes_important_date(tmp_path):
+    class FakeMemory:
+        data = {"important_dates": [{"date": "08-15", "event": "宝贝生日"}]}
+
+    rm, _ = _make_rm(tmp_path, push=FakePush(), due=[])
+    rm.memory = FakeMemory()
+    text = rm.build_digest(datetime.datetime(2026, 8, 15, 8, 0))
+    assert "今天是宝贝生日" in text

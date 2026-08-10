@@ -27,6 +27,7 @@ for _var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
 
 from config import load_config, api_key_valid
 from deepseek import DeepSeek
+from healthcheck import run_health_check
 from memory import Memory
 from bot import XiaoQiBot
 from ilink import ILinkClient
@@ -34,6 +35,7 @@ from ilink import ILinkClient
 
 def main():
     cfg = load_config()
+    run_health_check(cfg)  # 启动自检：密钥/依赖/数据状态一览
     deepseek = DeepSeek()
     mem = Memory(deepseek)
     client = ILinkClient()

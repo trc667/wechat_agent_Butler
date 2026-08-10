@@ -11,6 +11,7 @@
 """
 
 import argparse
+import json
 import re
 import sys
 import threading
@@ -62,9 +63,10 @@ class XiaoQiBot:
         self._last_sender = None   # 最近私聊过的人（定时问候发给 ta）
         self._extract_lock = threading.Lock()
         self.mgr = LifeManager()          # 备忘录/待办（manager.py）
+        self._pending_image = None        # 图片识别待确认：{kind, items, sender, ts}（防止误判自动入库）
         # 主动提醒：待办到期 + 每日晨报。微信直推（reminder_push）优先，企微兑底。
         self.reminder = ReminderManager(self.mgr, cfg, push=reminder_push,
-                                        weather_fn=self._weather_line)
+                                        weather_fn=self._weather_line, memory=self.mem)
         if self.reminder.available():
             if reminder_push is not None:
                 print("[提醒] 微信主动提醒已启用：待办到期 + 每日晨报将直推微信")
@@ -100,8 +102,115 @@ class XiaoQiBot:
                          daemon=True).start()
 
     def _image_worker(self, sender, image_bytes):
-        """识图：结合对话历史/记忆/备忘录，用管家口吻回复（优先百炼视觉模型）。"""
+        """识图：优先尝试把图片里的待办/备忘清单自动入库，否则普通描述回复。"""
         self._rate_limit()
+        if self._try_extract_todo_from_image(sender, image_bytes):
+            return  # 已识别为清单并入库
+        self._describe_image(sender, image_bytes)
+
+    def _handle_image_confirm(self, sender, text):
+        """处理图片识别后的确认/取消。命中返回 True（已回复）。"""
+        p = self._pending_image
+        if not p or p.get("sender") != sender:
+            return False
+        if time.time() - p.get("ts", 0) > 600:  # 10 分钟过期，防旧图残留
+            self._pending_image = None
+            return False
+        t = (text or "").strip()
+        if re.match(r"^(记下|存|要|好|嗯|确认|是的|对|存下来)", t):
+            self._commit_image_pending(sender, p)
+            return True
+        if re.match(r"^(不用|不要|忽略|算了|不记|取消|删|没)", t):
+            self._pending_image = None
+            reply = "好的，不记了。"
+            self._send(sender, reply)
+            self.mem.append_history("assistant", reply)
+            return True
+        return False
+
+    def _commit_image_pending(self, sender, p):
+        """用户确认后，把图片识别出的清单入库。"""
+        kind = p.get("kind")
+        items = p.get("items") or []
+        self._pending_image = None
+        if kind == "todo":
+            added = []
+            for i in items:
+                text = str(i.get("text") or "").strip()
+                due = str(i.get("due") or "").strip()
+                if due and not re.match(r"^\d{4}-\d{2}-\d{2}$", due):
+                    due = ""
+                self.mgr.data["todos"].append(
+                    {"text": text, "due": due, "done": False, "reminded": False})
+                added.append("%s（%s前）" % (text, due) if due else text)
+            self.mgr.save()
+            print("[管家] 图片待办已确认：%s" % "、".join(added))
+            reply = "已记下 %d 条待办：%s。完成时说「完成了xx」即可。" % (
+                len(added), "；".join(added))
+        else:
+            added = []
+            for i in items:
+                text = str(i.get("text") or "").strip()
+                if any(m["text"] == text for m in self.mgr.data["memos"]):
+                    continue  # 去重
+                self.mgr.data["memos"].append({"text": text, "ts": int(time.time())})
+                added.append(text)
+            self.mgr.save()
+            print("[管家] 图片备忘已确认：%s" % "、".join(added))
+            reply = ("已记下 %d 条备忘：%s。随时问「那个xx是什么」就能查到。" % (
+                len(added), "；".join(added)) if added else "图里的备忘之前都记过了，没有新增。")
+        reply = strip_emoji(reply)
+        self._send(sender, reply)
+        self.mem.append_history("assistant", reply)
+
+    def _try_extract_todo_from_image(self, sender, image_bytes):
+        """识别图片里的待办/备忘清单，先确认再入库（防止误判自动存）。命中返回 True。"""
+        if not self.cfg.get("dashscope_api_key"):
+            return False
+        from vision import describe_image
+        prompt = (
+            "分析这张图片：只有图片主体是待办清单、任务清单或备忘清单（手写/打印/屏幕截图），"
+            "才提取每一项；如果是食物/风景/人物/宠物/实物照片等普通图片，一律返回 type=none。"
+            "只输出一个 JSON："
+            '{"type": "todo" 或 "memo" 或 "none", '
+            '"items": [{"text": "事项内容", "due": "YYYY-MM-DD 或空"}]}')
+        raw = describe_image(image_bytes, prompt=prompt)
+        data = self._parse_json(raw)
+        if not data or not isinstance(data, dict):
+            return False
+        kind = str(data.get("type") or "none").strip().lower()
+        items = data.get("items") if isinstance(data.get("items"), list) else []
+        items = [i for i in items if isinstance(i, dict) and str(i.get("text") or "").strip()]
+        if kind not in ("todo", "memo") or not items:
+            return False
+        # 先存为待确认，不直接入库
+        self._pending_image = {"kind": kind, "items": items,
+                               "sender": sender, "ts": time.time()}
+        preview = "；".join(str(i.get("text")).strip() for i in items[:5])
+        if len(items) > 5:
+            preview += " 等%d条" % len(items)
+        print("[管家] 图片识别%s待确认：%s" % (kind, preview))
+        reply = ("从图里认出 %d 条%s：%s。回复「记下」我就帮你存，不是要记的内容就忽略。"
+                 % (len(items), "待办" if kind == "todo" else "备忘", preview))
+        reply = strip_emoji(reply)
+        self._send(sender, reply)
+        self.mem.append_history("assistant", reply)
+        return True
+
+    @staticmethod
+    def _parse_json(raw):
+        """稳健解析模型输出的 JSON（容忍围栏和多余文字）。"""
+        text = (raw or "").strip()
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            return None
+        try:
+            return json.loads(text[start:end + 1])
+        except Exception:
+            return None
+
+    def _describe_image(self, sender, image_bytes):
+        """普通识图描述：结合对话历史/记忆/备忘录，用管家口吻回复。"""
         from vision import describe_image
         # 组装上下文：最近对话 + 长期记忆 + 备忘录（让识图回复“像管家”、能结合已有信息）
         ctx = []
@@ -160,6 +269,9 @@ class XiaoQiBot:
 
     def _reply_worker(self, sender, text):
         self._rate_limit()
+        # 图片识别确认（识别到清单后先问，用户回「记下」才入库）
+        if self._handle_image_confirm(sender, text):
+            return
         handled, hint = self.mgr.handle(text, self.ds)
         if not handled:  # 不是管家命令，试试天气
             handled, hint = self._try_weather(text)

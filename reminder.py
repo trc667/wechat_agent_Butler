@@ -31,6 +31,14 @@ for _stream in (sys.stdout, sys.stderr):
 
 WEEKDAYS = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 
+# 固定公历节日表（MM-DD -> 名称；农历节日如春节/中秋未内置）
+FIXED_HOLIDAYS = {
+    "01-01": "元旦", "02-14": "情人节", "03-08": "妇女节",
+    "04-01": "愚人节", "05-01": "劳动节", "06-01": "儿童节",
+    "09-10": "教师节", "10-01": "国庆节", "11-11": "双十一",
+    "12-24": "平安夜", "12-25": "圣诞节",
+}
+
 # 贴心话（无 emoji、管家口吻）：周一/周五/周末有针对性提示，其余随机挑一条
 _TIPS = [
     "今天想好先做什么了吗？",
@@ -53,11 +61,12 @@ def _wecom_client(cfg):
 class ReminderManager:
     """待办到期提醒 + 每日晨报。push 可注入（测试/微信直推用），默认走企微客户端。"""
 
-    def __init__(self, mgr, cfg, push=None, interval=30, weather_fn=None):
+    def __init__(self, mgr, cfg, push=None, interval=30, weather_fn=None, memory=None):
         self.mgr = mgr                    # LifeManager：读待办/备忘录
         self.cfg = cfg
         self._push_fn = push              # callable(text) -> bool，微信直推用
         self._weather_fn = weather_fn     # callable() -> str/None，晨报附天气
+        self.memory = memory              # Memory：读重要日子（可选）
         self._client = None               # 企微客户端（兜底）
         self.interval = int(interval)
         self.target = (cfg.get("admin_userid") or "").strip()
@@ -97,26 +106,35 @@ class ReminderManager:
     # ---------- 待办到期提醒 ----------
 
     def check_due_todos(self, now=None):
-        """到期的待办推一次提醒（reminded 防重复）。返回推送条数。"""
+        """到期的待办推一次提醒（reminded 防重复）。多条合并成一条防刷屏。返回提醒条数。"""
         now = now or datetime.datetime.now()
         today = now.strftime("%Y-%m-%d")
-        sent = 0
         with self._lock:
+            due_now = []
             for t in self.mgr.data["todos"]:
                 due = t.get("due") or ""
                 if t.get("done") or t.get("reminded") or not due:
                     continue
                 if due <= today:  # 到期或已过期，提醒一次
                     t["reminded"] = True
-                    if due == today:
-                        text = "小管家提醒：待办「%s」今天到期，记得处理哦" % t["text"]
-                    else:
-                        text = "小管家提醒：待办「%s」已于 %s 到期，还没完成，记得处理哦" % (t["text"], due)
-                    if self._send(text):
-                        sent += 1
-            if sent:
-                self.mgr.save()
-        return sent
+                    due_now.append(t)
+            if not due_now:
+                return 0
+            self.mgr.save()
+        # 合并发送：一条消息提醒所有到期待办
+        if len(due_now) == 1:
+            t = due_now[0]
+            text = "小管家提醒：待办「%s」%s，记得处理哦" % (
+                t["text"], "今天到期" if t.get("due") == today
+                else "已于 %s 到期" % t["due"])
+        else:
+            parts = ["%s（今天）" % t["text"] if t.get("due") == today
+                     else "%s（%s）" % (t["text"], t["due"]) for t in due_now]
+            text = "小管家提醒：你有 %d 条待办到期了：%s。记得处理哦" % (
+                len(due_now), "；".join(parts))
+        if self._send(text):
+            return len(due_now)
+        return 0
 
     # ---------- 每日晨报 ----------
 
@@ -133,6 +151,22 @@ class ReminderManager:
             return "新的一周，加油！"
         import random
         return random.choice(_TIPS)
+
+    def _day_note(self, now, delta=0):
+        """今天/明天是什么日子（固定节日 + 记忆里的重要日子）。无则返回空。"""
+        day = now + datetime.timedelta(days=delta)
+        mmdd = day.strftime("%m-%d")
+        names = []
+        name = FIXED_HOLIDAYS.get(mmdd)
+        if name:
+            names.append(name)
+        if self.memory is not None:
+            for d in (self.memory.data.get("important_dates") or []):
+                if d.get("date") == mmdd and d.get("event"):
+                    names.append(d["event"])
+        if not names:
+            return ""
+        return "%s是%s" % ("今天" if delta == 0 else "明天", "、".join(names))
 
     def build_digest(self, now=None):
         """组装晨报文本：问候 + 待办 + 备忘条数（清爽版，不塞备忘录原文，无 emoji）。"""
@@ -154,6 +188,13 @@ class ReminderManager:
                 for t in active))
         else:
             lines.append("今日没有待办，可以安心安排自己的事。")
+        # 今天/明天是什么日子（固定节日 + 记忆里的重要日子）
+        today_note = self._day_note(now, 0)
+        if today_note:
+            lines.append(today_note)
+        tomorrow_note = self._day_note(now, 1)
+        if tomorrow_note:
+            lines.append(tomorrow_note)
         # 备忘录只报条数，不塞原文（避免敏感凭据/超长内容每天推送到微信）
         n = len(self.mgr.data["memos"])
         if n:

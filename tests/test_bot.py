@@ -107,3 +107,140 @@ def test_image_worker_uses_context(monkeypatch):
     assert "最近对话" in captured["prompt"]
     assert "用户是程序员" in captured["prompt"]
     assert "备忘录" in captured["prompt"]
+
+
+def test_image_todo_requires_confirm(monkeypatch, tmp_path):
+    """清单照片：先问确认，用户回「记下」才入库（防误判）。"""
+    import os
+    from bot import XiaoQiBot
+    from manager import LifeManager
+
+    class FakeMem:
+        def text(self):
+            return ""
+
+        def recent_history(self, n):
+            return []
+
+        def append_history(self, role, content):
+            pass
+
+    def fake_describe(image_bytes, prompt=None):
+        return '{"type": "todo", "items": [{"text": "交房租", "due": "2026-08-20"}]}'
+
+    monkeypatch.setattr("vision.describe_image", fake_describe)
+    sent = []
+    mgr = LifeManager(os.path.join(str(tmp_path), "manager.json"))
+    b = XiaoQiBot(None, FakeMem(),
+                  {"min_reply_interval": 0, "dashscope_api_key": "sk-x"},
+                  send=lambda s, t: sent.append((s, t)))
+    b.mgr = mgr
+    b._image_worker("wxid", b"\xff\xd8\xff" + b"x" * 50)
+    # 识别到但没入库，先问确认
+    assert len(mgr.data["todos"]) == 0
+    assert "记下" in sent[-1][1]
+    assert b._pending_image is not None
+    # 用户回复「记下」→ 入库
+    b._reply_worker("wxid", "记下")
+    assert len(mgr.data["todos"]) == 1
+    assert mgr.data["todos"][0]["text"] == "交房租"
+    assert mgr.data["todos"][0]["due"] == "2026-08-20"
+    assert b._pending_image is None
+
+
+def test_image_todo_cancel(monkeypatch, tmp_path):
+    """用户说「不用」→ 不入库。"""
+    import os
+    from bot import XiaoQiBot
+    from manager import LifeManager
+
+    class FakeMem:
+        def text(self):
+            return ""
+
+        def recent_history(self, n):
+            return []
+
+        def append_history(self, role, content):
+            pass
+
+    def fake_describe(image_bytes, prompt=None):
+        return '{"type": "todo", "items": [{"text": "交房租"}]}'
+
+    monkeypatch.setattr("vision.describe_image", fake_describe)
+    sent = []
+    mgr = LifeManager(os.path.join(str(tmp_path), "manager.json"))
+    b = XiaoQiBot(None, FakeMem(),
+                  {"min_reply_interval": 0, "dashscope_api_key": "sk-x"},
+                  send=lambda s, t: sent.append((s, t)))
+    b.mgr = mgr
+    b._image_worker("wxid", b"\xff\xd8\xff" + b"x" * 50)
+    b._reply_worker("wxid", "不用了")
+    assert len(mgr.data["todos"]) == 0
+    assert b._pending_image is None
+
+
+def test_image_memo_confirm_dedup(monkeypatch, tmp_path):
+    """备忘照片确认后入库且去重。"""
+    import os
+    from bot import XiaoQiBot
+    from manager import LifeManager
+
+    class FakeMem:
+        def text(self):
+            return ""
+
+        def recent_history(self, n):
+            return []
+
+        def append_history(self, role, content):
+            pass
+
+    def fake_describe(image_bytes, prompt=None):
+        return '{"type": "memo", "items": [{"text": "测试环境地址 http://x"}, {"text": "已存在"}]}'
+
+    monkeypatch.setattr("vision.describe_image", fake_describe)
+    sent = []
+    mgr = LifeManager(os.path.join(str(tmp_path), "manager.json"))
+    mgr.data["memos"] = [{"text": "已存在", "ts": 1}]
+    b = XiaoQiBot(None, FakeMem(),
+                  {"min_reply_interval": 0, "dashscope_api_key": "sk-x"},
+                  send=lambda s, t: sent.append((s, t)))
+    b.mgr = mgr
+    b._image_worker("wxid", b"\xff\xd8\xff" + b"x" * 50)
+    assert len(mgr.data["memos"]) == 1  # 未确认前不入库
+    b._reply_worker("wxid", "记下")
+    assert len(mgr.data["memos"]) == 2  # 已存在的没重复加
+    assert "http://x" in mgr.data["memos"][1]["text"]
+
+
+def test_image_none_falls_back_to_describe(monkeypatch):
+    """普通图片（非清单）→ 走普通描述流程，不打扰。"""
+    from bot import XiaoQiBot
+
+    class FakeMem:
+        def text(self):
+            return ""
+
+        def recent_history(self, n):
+            return []
+
+        def append_history(self, role, content):
+            pass
+
+    calls = []
+
+    def fake_describe(image_bytes, prompt=None):
+        calls.append(prompt)
+        # 第一次结构化请求返回 none，第二次（描述）返回描述
+        return '{"type": "none"}' if len(calls) == 1 else "这是一张风景照。"
+
+    monkeypatch.setattr("vision.describe_image", fake_describe)
+    sent = []
+    b = XiaoQiBot(None, FakeMem(),
+                  {"min_reply_interval": 0, "dashscope_api_key": "sk-x"},
+                  send=lambda s, t: sent.append((s, t)))
+    b._image_worker("wxid", b"\xff\xd8\xff" + b"x" * 50)
+    assert len(sent) == 1 and "风景照" in sent[0][1]
+    assert len(calls) == 2  # 结构化 + 描述各一次
+    assert b._pending_image is None  # 普通图片不会产生待确认
