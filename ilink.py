@@ -205,7 +205,11 @@ class ILinkClient:
             f.write(buf)
 
     def get_updates(self):
-        """拉一轮消息。返回 msgs 列表（可能为空）。游标自动持久化。"""
+        """拉一轮消息。返回 msgs 列表（可能为空）。游标自动持久化。
+
+        ret=-1 常见于游标损坏/服务端不认旧游标（比如 bot 被强杀时写了一半），
+        会清空游标重试一次，避免 bot 永久卡死在报错循环。
+        """
         payload = {
             "get_updates_buf": self._load_cursor(),
             "base_info": {"channel_version": CHANNEL_VERSION},
@@ -214,6 +218,17 @@ class ILinkClient:
         ret = data.get("ret", data.get("errcode", 0))
         if ret == -14:
             raise ILinkError("SESSION_EXPIRED")
+        if ret == -1 and payload["get_updates_buf"]:
+            # 游标异常（实测：损坏/旧游标会让服务端返回 ret=-1）→ 清空重试一次
+            print("[日志] getupdates ret=-1，疑似游标异常，清空游标重试…")
+            self._save_cursor("")
+            payload["get_updates_buf"] = ""
+            data = self._post("/ilink/bot/getupdates", payload, timeout=60)
+            ret = data.get("ret", data.get("errcode", 0))
+            if ret == 0:
+                buf = data.get("get_updates_buf") or ""
+                self._save_cursor(buf)
+                return data.get("msgs") or []
         if ret != 0:
             raise ILinkError("getupdates 失败: %s" % data)
         buf = data.get("get_updates_buf") or ""
