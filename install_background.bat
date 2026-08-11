@@ -19,10 +19,10 @@ powercfg /setactive SCHEME_CURRENT
 
 echo [2/3] 注册开机自启 ...
 set "PRJDIR=%~dp0"
-powershell -NoProfile -Command "$lnk=Join-Path ([Environment]::GetFolderPath('Startup')) 'xiaoji_bot.lnk';$w=New-Object -ComObject WScript.Shell;$c=$w.CreateShortcut($lnk);$c.TargetPath='D:\anaconda\anaconda1\pythonw.exe';$c.Arguments=chr(34)+$env:PRJDIR+'run_bot_hidden.pyw'+chr(34);$c.WorkingDirectory=$env:PRJDIR;$c.WindowStyle=7;$c.Save()"
+powershell -NoProfile -Command "$lnk=Join-Path ([Environment]::GetFolderPath('Startup')) 'xiaoji_bot.lnk';$w=New-Object -ComObject WScript.Shell;$c=$w.CreateShortcut($lnk);$c.TargetPath=$env:WINDIR+'\System32\wscript.exe';$c.Arguments=chr(34)+$env:PRJDIR+'start_guardian.vbs'+chr(34);$c.WorkingDirectory=$env:PRJDIR;$c.WindowStyle=7;$c.Save()"
 
 echo [3/3] 现在后台启动 ...
-start "" "D:\anaconda\anaconda1\pythonw.exe" "%PRJDIR%run_bot_hidden.pyw"
+start "" "%WINDIR%\System32\wscript.exe" "%PRJDIR%start_guardian.vbs"
 
 echo.
 echo 完成!日志在 logs\bot.log

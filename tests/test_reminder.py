@@ -206,6 +206,63 @@ def test_digest_news_failure_keeps_digest(tmp_path):
     assert "早安" in rm._push_fn.sent[0]
 
 
+# ---------- 定时提醒（上下班打卡） ----------
+
+def _cfg_with_clock(extra=None):
+    cfg = {"admin_userid": "wang",
+           "daily_greeting": {"time": "08:00", "text": "早上好"},
+           "clock_reminders": {"enabled": True, "times": [
+               {"time": "08:25", "text": "上班打卡时间到"},
+               {"time": "18:00", "text": "下班时间到"},
+           ]}}
+    if extra:
+        cfg["clock_reminders"].update(extra)
+    return cfg
+
+
+def _make_rm_clock(tmp_path, push, cfg=None):
+    mgr = LifeManager(os.path.join(str(tmp_path), "manager.json"))
+    return ReminderManager(mgr, cfg or _cfg_with_clock(), push=push), mgr
+
+
+def test_clock_sends_at_time(tmp_path):
+    push = FakePush()
+    rm, _ = _make_rm_clock(tmp_path, push)
+    assert rm.maybe_send_clock_reminders(datetime.datetime(2026, 8, 6, 8, 25)) == 1
+    assert push.sent == ["上班打卡时间到"]
+
+
+def test_clock_no_duplicate_same_day(tmp_path):
+    push = FakePush()
+    rm, _ = _make_rm_clock(tmp_path, push)
+    t = datetime.datetime(2026, 8, 6, 18, 0)
+    assert rm.maybe_send_clock_reminders(t) == 1
+    assert rm.maybe_send_clock_reminders(t) == 0  # 同一天同一时间点不重复
+    assert len(push.sent) == 1
+
+
+def test_clock_multiple_times_same_day(tmp_path):
+    push = FakePush()
+    rm, _ = _make_rm_clock(tmp_path, push)
+    assert rm.maybe_send_clock_reminders(datetime.datetime(2026, 8, 6, 8, 25)) == 1
+    assert rm.maybe_send_clock_reminders(datetime.datetime(2026, 8, 6, 18, 0)) == 1
+    assert len(push.sent) == 2  # 两个时间点各推一次
+
+
+def test_clock_disabled(tmp_path):
+    push = FakePush()
+    rm, _ = _make_rm_clock(tmp_path, push, _cfg_with_clock({"enabled": False}))
+    assert rm.maybe_send_clock_reminders(datetime.datetime(2026, 8, 6, 8, 25)) == 0
+    assert push.sent == []
+
+
+def test_clock_wrong_time_no_send(tmp_path):
+    push = FakePush()
+    rm, _ = _make_rm_clock(tmp_path, push)
+    assert rm.maybe_send_clock_reminders(datetime.datetime(2026, 8, 6, 9, 0)) == 0
+    assert push.sent == []
+
+
 # ---------- 节日 / 重要日子 ----------
 
 def test_day_note_fixed_holiday(tmp_path):

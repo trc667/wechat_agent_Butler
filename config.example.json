@@ -15,6 +15,15 @@
     "time": "08:00",
     "text": "早上好"
   },
+  "clock_reminders": {
+    "enabled": true,
+    "times": [
+      {"time": "08:25", "text": "上班打卡时间到，记得打卡哦"},
+      {"time": "12:00", "text": "中午下班啦，记得打卡再休息"},
+      {"time": "13:25", "text": "下午上班时间到，记得打卡"},
+      {"time": "18:00", "text": "下班时间到，记得打卡"}
+    ]
+  },
   "wecom": {
     "corpid": "",
     "agentid": "",

@@ -75,6 +75,7 @@ class ReminderManager:
         self._lock = threading.Lock()
         self._digest_last_day = None
         self._digest_time = str((cfg.get("daily_greeting") or {}).get("time", "09:00"))
+        self._clock_sent = set()   # (日期, HH:MM) 已发送过的定时提醒，防同一天重复
 
     # ---------- 可用性 ----------
 
@@ -207,6 +208,29 @@ class ReminderManager:
             lines.append(tip)
         return strip_emoji("\n".join(lines))
 
+    # ---------- 定时提醒（如上下班打卡） ----------
+
+    def maybe_send_clock_reminders(self, now=None):
+        """到点推定时提醒（clock_reminders 配置），每个时间点每天只推一次。返回发送条数。"""
+        now = now or datetime.datetime.now()
+        conf = self.cfg.get("clock_reminders") or {}
+        if not conf.get("enabled", True):
+            return 0
+        hhmm = now.strftime("%H:%M")
+        sent = 0
+        for item in conf.get("times") or []:
+            t = str(item.get("time") or "")
+            if t != hhmm:
+                continue
+            key = (now.date(), t)
+            if key in self._clock_sent:
+                continue
+            text = item.get("text") or "到时间啦，记得打卡"
+            if self._send(text):
+                self._clock_sent.add(key)
+                sent += 1
+        return sent
+
     def maybe_send_digest(self, now=None):
         """每天到点发一次晨报（当天不重复，可附天气）。返回是否发送。"""
         now = now or datetime.datetime.now()
@@ -240,6 +264,7 @@ class ReminderManager:
         while True:
             try:
                 self.check_due_todos()
+                self.maybe_send_clock_reminders()
                 self.maybe_send_digest()
             except Exception as e:
                 print("[提醒] 循环异常: %s" % e)

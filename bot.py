@@ -70,7 +70,7 @@ class XiaoQiBot:
                                         memory=self.mem, news_fn=self._news_line)
         if self.reminder.available():
             if reminder_push is not None:
-                print("[提醒] 微信主动提醒已启用：待办到期 + 每日晨报将直推微信")
+                print("[提醒] 微信主动提醒已启用：待办到期 + 每日晨报 + 定时打卡将直推微信")
             else:
                 print("[提醒] 待办到期提醒 + 每日晨报已启用（企微推送，收件人: %s，晨报 %s）"
                       % (self.reminder.target, self.reminder._digest_time))
