@@ -192,6 +192,20 @@ def test_digest_weather_failure_keeps_digest(tmp_path):
     assert "早安" in rm._push_fn.sent[0]
 
 
+def test_digest_appends_news(tmp_path):
+    rm, _ = _make_rm(tmp_path, push=FakePush(), due=[])
+    rm._news_fn = lambda: "今日科技/AI 新闻：\nDeepSeek 发布 V4 Flash（InfoQ）"
+    assert rm.maybe_send_digest(datetime.datetime(2026, 8, 6, 9, 0)) is True
+    assert "DeepSeek 发布 V4 Flash" in rm._push_fn.sent[0]
+
+
+def test_digest_news_failure_keeps_digest(tmp_path):
+    rm, _ = _make_rm(tmp_path, push=FakePush(), due=[])
+    rm._news_fn = lambda: None  # 新闻抓不到
+    assert rm.maybe_send_digest(datetime.datetime(2026, 8, 6, 9, 0)) is True  # 晨报照常发
+    assert "早安" in rm._push_fn.sent[0]
+
+
 # ---------- 节日 / 重要日子 ----------
 
 def test_day_note_fixed_holiday(tmp_path):

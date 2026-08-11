@@ -61,11 +61,13 @@ def _wecom_client(cfg):
 class ReminderManager:
     """待办到期提醒 + 每日晨报。push 可注入（测试/微信直推用），默认走企微客户端。"""
 
-    def __init__(self, mgr, cfg, push=None, interval=30, weather_fn=None, memory=None):
+    def __init__(self, mgr, cfg, push=None, interval=30, weather_fn=None,
+                 memory=None, news_fn=None):
         self.mgr = mgr                    # LifeManager：读待办/备忘录
         self.cfg = cfg
         self._push_fn = push              # callable(text) -> bool，微信直推用
         self._weather_fn = weather_fn     # callable() -> str/None，晨报附天气
+        self._news_fn = news_fn           # callable() -> str/None，晨报附新闻
         self.memory = memory              # Memory：读重要日子（可选）
         self._client = None               # 企微客户端（兜底）
         self.interval = int(interval)
@@ -218,6 +220,13 @@ class ReminderManager:
                 w = self._weather_fn()
                 if w:
                     text += "\n" + w
+            except Exception:
+                pass
+        if self._news_fn is not None:
+            try:
+                n = self._news_fn()
+                if n:
+                    text += "\n\n" + n
             except Exception:
                 pass
         if self._send(text):

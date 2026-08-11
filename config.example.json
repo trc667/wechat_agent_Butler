@@ -9,11 +9,11 @@
   "min_reply_interval": 3,
   "history_keep": 12,
   "memory_extract_every": 5,
-  "weather_city": "北京",
+  "weather_city": "深圳",
   "daily_greeting": {
     "enabled": true,
-    "time": "09:00",
-    "text": "早安宝贝～今天也要元气满满哦 ☀️"
+    "time": "08:00",
+    "text": "早上好"
   },
   "wecom": {
     "corpid": "",

@@ -66,7 +66,8 @@ class XiaoQiBot:
         self._pending_image = None        # 图片识别待确认：{kind, items, sender, ts}（防止误判自动入库）
         # 主动提醒：待办到期 + 每日晨报。微信直推（reminder_push）优先，企微兑底。
         self.reminder = ReminderManager(self.mgr, cfg, push=reminder_push,
-                                        weather_fn=self._weather_line, memory=self.mem)
+                                        weather_fn=self._weather_line,
+                                        memory=self.mem, news_fn=self._news_line)
         if self.reminder.available():
             if reminder_push is not None:
                 print("[提醒] 微信主动提醒已启用：待办到期 + 每日晨报将直推微信")
@@ -84,6 +85,14 @@ class XiaoQiBot:
         try:
             from weather import fetch_weather
             return fetch_weather(self.cfg.get("weather_city") or "北京")
+        except Exception:
+            return None
+
+    def _news_line(self):
+        """晨报附加科技/AI 新闻（抓失败返回 None，晨报照常发）。"""
+        try:
+            from news import fetch_news
+            return fetch_news(max_items=3)
         except Exception:
             return None
 

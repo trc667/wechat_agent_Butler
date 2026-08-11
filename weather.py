@@ -29,6 +29,7 @@ _WEATHER_ZH = {
     "Fog": "雾", "Haze": "霾", "Windy": "大风",
     "Patchy rain possible": "零星小雨", "Light drizzle": "毛毛雨",
     "Moderate or heavy rain shower": "中到大雨",
+    "Patchy rain nearby": "局部有雨", "Smoky haze": "烟霾",
 }
 
 
