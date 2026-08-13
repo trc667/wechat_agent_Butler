@@ -40,12 +40,17 @@ def _fake_rss_resp(body):
     return FakeResp()
 
 
-def test_fetch_news_round_robin(monkeypatch):
-    """多源轮流取：每个源各出一条，保证混合。"""
+def test_fetch_news_ai_priority(monkeypatch):
+    """AI 相关新闻优先：量子位的 DeepSeek 重磅新闻排在普通新闻前面。"""
     bodies = {
+        "https://www.qbitai.com/feed":
+            "<rss><channel><item><title>刚刚！DeepSeek V4 Pro正式版发布</title></item>"
+            "<item><title>普通新闻X</title></item></channel></rss>",
         "https://www.infoq.cn/feed": RSS2,  # 新闻A/B
-        "https://www.ithome.com/rss/": "<rss><channel><item><title>新闻C</title></item><item><title>新闻D</title></item></channel></rss>",
-        "https://sspai.com/feed": "<rss><channel><item><title>新闻E</title></item></channel></rss>",
+        "https://www.ithome.com/rss/":
+            "<rss><channel><item><title>新闻C</title></item></channel></rss>",
+        "https://sspai.com/feed":
+            "<rss><channel><item><title>新闻E</title></item></channel></rss>",
     }
 
     def fake_get(url, **kw):
@@ -54,9 +59,30 @@ def test_fetch_news_round_robin(monkeypatch):
     monkeypatch.setattr(news.requests, "get", fake_get)
     text = news.fetch_news(max_items=3)
     assert text.startswith("今日科技/AI 新闻：")
-    assert "新闻A（InfoQ）" in text
-    assert "新闻C（IT之家）" in text
-    assert "新闻E（少数派）" in text
+    # AI 评分高的 DeepSeek 新闻必须排第一
+    lines = text.split("\n")[1:]
+    assert "DeepSeek" in lines[0]
+    assert len(lines) <= 3
+
+
+def test_fetch_news_dedup(monkeypatch):
+    """同一标题跨源重复时只保留一条。"""
+    dup = "<rss><channel><item><title>同一个标题</title></item></channel></rss>"
+    bodies = {url: dup for _, url in news.RSS_SOURCES}
+
+    def fake_get(url, **kw):
+        return _fake_rss_resp(bodies[url])
+
+    monkeypatch.setattr(news.requests, "get", fake_get)
+    text = news.fetch_news(max_items=5)
+    assert text.count("同一个标题") == 1
+
+
+def test_ai_score():
+    assert news._ai_score("DeepSeek V4 Pro 正式发布") >= 2
+    assert news._ai_score("GPT-5.5 训练细节曝光") >= 2
+    assert news._ai_score("苹果面临诉讼") == 0
+    assert news._ai_score("") == 0
 
 
 def test_fetch_news_all_fail(monkeypatch):

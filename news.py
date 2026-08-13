@@ -16,12 +16,33 @@ _NO_PROXY = {"http": None, "https": None}
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"}
 
-# RSS 源（名称, URL）。实测可用：InfoQ/IT之家/少数派。抓取失败自动跳过。
+# RSS 源（名称, URL）。实测可用：量子位（AI 垂直）/InfoQ/IT之家/少数派。抓取失败自动跳过。
 RSS_SOURCES = [
+    ("量子位", "https://www.qbitai.com/feed"),   # AI 垂直源，重磅 AI 新闻时效好
     ("InfoQ", "https://www.infoq.cn/feed"),
     ("IT之家", "https://www.ithome.com/rss/"),
     ("少数派", "https://sspai.com/feed"),
 ]
+
+# AI 相关关键词评分：标题命中就加权，保证重磅 AI 新闻排在前面
+_AI_STRONG = ("deepseek", "openai", "gpt", "claude", "gemini", "大模型",
+              "人工智能", "qwen", "通义", "kimi", "豆包", "文心", "智谱",
+              "glm", "llama", "英伟达", "ai 芯片", "ai芯片")
+_AI_MEDIUM = ("ai", "模型", "算力", "芯片", "机器人", "自动驾驶", "开源",
+              "发布会", "正式发布", "上线")
+
+
+def _ai_score(title):
+    """标题的 AI 相关度评分（强词 2 分，中词 1 分），0 表示无关。"""
+    t = (title or "").lower()
+    score = 0
+    for w in _AI_STRONG:
+        if w in t:
+            score += 2
+    for w in _AI_MEDIUM:
+        if w in t:
+            score += 1
+    return score
 
 
 def parse_rss(data, source_name):
@@ -44,28 +65,28 @@ def parse_rss(data, source_name):
     return items
 
 
-def fetch_news(max_items=3, timeout=8):
-    """抓科技/AI 新闻标题（最多 max_items 条，多源轮流取保证混合）。失败返回 None。"""
-    per_source = []
+def fetch_news(max_items=5, timeout=8):
+    """抓科技/AI 新闻标题（最多 max_items 条）。AI 相关优先（评分排序），
+    保证 DeepSeek 发布等重磅 AI 新闻不被普通科技新闻挤掉。失败返回 None。"""
+    all_items = []  # (score, title, source)
     for name, url in RSS_SOURCES:
         try:
             r = requests.get(url, timeout=timeout, proxies=_NO_PROXY, headers=_HEADERS)
             r.raise_for_status()
-            items = parse_rss(r.content, name)
-            if items:
-                per_source.append((name, items))
+            for title, _ in parse_rss(r.content, name):
+                all_items.append((_ai_score(title), title, name))
         except Exception:
             continue
-    if not per_source:
+    if not all_items:
         return None
+    # AI 评分高的排前面；同分保持源顺序（源列表里 AI 垂直源在前）
+    all_items.sort(key=lambda x: -x[0])
     lines, seen = [], set()
-    idx = 0
-    while len(lines) < max_items and any(len(items) > idx for _, items in per_source):
-        for name, items in per_source:
-            if len(items) > idx and items[idx][0] not in seen:
-                seen.add(items[idx][0])
-                lines.append("%s（%s）" % (items[idx][0], name))
-                if len(lines) >= max_items:
-                    break
-        idx += 1
+    for score, title, name in all_items:
+        if title in seen:
+            continue
+        seen.add(title)
+        lines.append("%s（%s）" % (title, name))
+        if len(lines) >= max_items:
+            break
     return "今日科技/AI 新闻：\n" + "\n".join(lines)
