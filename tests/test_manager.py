@@ -18,6 +18,8 @@ class FakeDS:
 
 
 class BadDS:
+    """假模型：输出非 JSON 的废话，验证降级路径。"""
+
     def chat(self, messages, **kw):
         return "模型没输出 json，说了一堆废话"
 
@@ -40,6 +42,44 @@ def test_route_plain_chat_passthrough(tmp_path):
     handled, hint = mgr.handle("今天天气怎么样", FakeDS())
     assert handled is False
     assert hint is None
+
+
+# ---------- 定时提醒 ----------
+
+class TimerDS:
+    """假模型：返回定时提醒 JSON。"""
+
+    def __init__(self, at="2026-08-06 15:00", text="开会"):
+        self.at = at
+        self.text = text
+
+    def chat(self, messages, **kw):
+        return json.dumps({"at": self.at, "text": self.text})
+
+
+def test_add_timer_route(tmp_path):
+    mgr = _make_mgr(tmp_path)
+    handled, hint = mgr.handle("下午3点提醒我开会", TimerDS())
+    assert handled is True
+    assert len(mgr.data["timers"]) == 1
+    assert mgr.data["timers"][0]["at"] == "2026-08-06 15:00"
+    assert mgr.data["timers"][0]["text"] == "开会"
+    assert mgr.data["timers"][0]["fired"] is False
+    assert "15:00" in hint
+
+
+def test_add_timer_no_time(tmp_path):
+    mgr = _make_mgr(tmp_path)
+    handled, hint = mgr.handle("提醒我开会", TimerDS(at=""))
+    assert handled is True
+    assert mgr.data["timers"] == []
+    assert "时间" in hint  # 提示要说明时间
+
+
+def test_timer_not_triggered_by_normal_chat(tmp_path):
+    mgr = _make_mgr(tmp_path)
+    handled, _ = mgr.handle("今天的天气怎么样", FakeDS())
+    assert handled is False
 
 
 def test_route_empty_text(tmp_path):

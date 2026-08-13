@@ -9,6 +9,7 @@
 - 记待办   「记一下周三交房租」（日期可说：明天/周三/8月5号/月底）
 - 查待办   「我有哪些待办」「清单」
 - 完成待办 「完成了交房租」「搞定取快递」
+- 定时提醒 「下午3点提醒我开会」「20分钟后提醒我关火」「明天9点提醒我抢课」（到点微信直推）
 
 流程：关键词路由（不用模型判断是不是管家消息）-> 只有待办要理解日期时才
 用小调用让 DeepSeek 提取 -> 落盘 -> 返回「内部消息」给 bot，让管家用人设口吻回复。
@@ -31,9 +32,20 @@ for _stream in (sys.stdout, sys.stderr):
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 MANAGER_PATH = os.path.join(DATA_DIR, "manager.json")
 
-EMPTY = {"todos": [], "memos": []}
+EMPTY = {"todos": [], "memos": [], "timers": []}
 
 WEEKDAYS = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+
+# 定时提醒提取提示词：把「下午3点提醒我开会」转成具体时间点
+EXTRACT_TIMER = """你是定时提醒提取助手。今天日期：{date}（{weekday}），当前时间：{now}。
+从下面这句话里提取「提醒时间」和「提醒内容」，只输出一个 JSON：
+{{"at": "YYYY-MM-DD HH:MM 24小时制 或空字符串", "text": "提醒内容，简短"}}
+规则：
+- 时间换算成具体时间点：下午3点=15:00，3点=当天15:00（若已过则明天），
+  20分钟后=当前+20分钟，明天9点=明天09:00，周五14:00=本周五14:00（若已过则下周）
+- 没说出明确时间就输出 at 为空字符串
+- 内容去掉语气词和称呼，简短
+对话：{text}"""
 
 # 待办提取提示词：只有记待办时用小调用，日期换算靠模型（喂了今天日期）
 EXTRACT_TODO = """你是待办提取助手。今天日期：{date}（{weekday}）。
@@ -104,6 +116,8 @@ class LifeManager:
         m = re.match(r"^(完成了|办完了|搞定|做完了|取消)\s*(.+)$", t)
         if m:
             return True, self._done_todo(m.group(2))
+        if re.search(r"(提醒我|提醒一下|定时提醒)", t):
+            return True, self._add_timer(t, deepseek)
         return False, None
 
     # ---------- 备忘录 ----------
@@ -161,7 +175,39 @@ class LifeManager:
         return ("（内部消息：用户要删「%s」，但你翻了备忘录没找到。"
                 "简短告诉他没找到，问他要删的是哪条。）" % kw)
 
-    # ---------- 待办 ----------
+    # ---------- 定时提醒 ----------
+
+    def _add_timer(self, t, ds):
+        """「下午3点提醒我开会」→ 存一条定时提醒，到点由 reminder 推微信。"""
+        now = datetime.datetime.now()
+        prompt = (EXTRACT_TIMER.replace("{date}", now.strftime("%Y年%m月%d日"))
+                              .replace("{weekday}", WEEKDAYS[now.weekday()])
+                              .replace("{now}", now.strftime("%H:%M"))
+                              .replace("{text}", t))
+        try:
+            raw = ds.chat([{"role": "system", "content": "只输出 JSON。"},
+                           {"role": "user", "content": prompt}],
+                          temperature=0.2, max_tokens=150)
+        except Exception:
+            raw = ""
+        r = _parse_json(raw) or {}
+        at = str(r.get("at", "") or "").strip()
+        text = str(r.get("text", "") or "").strip()
+        if not text:
+            return ("（内部消息：用户说要定时提醒，但你没听清要提醒什么。"
+                    "简短问他要提醒的事。）")
+        if not re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", at):
+            return ("（内部消息：用户说「%s」要定时提醒，但没给出明确时间。"
+                    "简短告诉他要说清时间，比如「下午3点提醒我开会」。）" % text)
+        self.data["timers"].append({"at": at, "text": text, "fired": False})
+        self.data["timers"].sort(key=lambda x: x["at"])
+        if len(self.data["timers"]) > 20:   # 最多留 20 条，旧的先淘汰
+            self.data["timers"] = self.data["timers"][-20:]
+        self.save()
+        hm = at[11:16]
+        print("[管家] 定时提醒：%s @ %s" % (text, at))
+        return ("（内部消息：用户设置了定时提醒「%s」在%s。"
+                "简短确认一句，比如「好的，%s 提醒你」。）" % (text, at, hm))
 
     def _add_todo(self, t, ds):
         now = datetime.datetime.now()

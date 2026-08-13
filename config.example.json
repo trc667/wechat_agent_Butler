@@ -10,6 +10,7 @@
   "history_keep": 12,
   "memory_extract_every": 5,
   "weather_city": "深圳",
+  "weather_alert_time": "07:30",
   "daily_greeting": {
     "enabled": true,
     "time": "08:00",

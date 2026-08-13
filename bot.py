@@ -67,7 +67,8 @@ class XiaoQiBot:
         # 主动提醒：待办到期 + 每日晨报。微信直推（reminder_push）优先，企微兑底。
         self.reminder = ReminderManager(self.mgr, cfg, push=reminder_push,
                                         weather_fn=self._weather_line,
-                                        memory=self.mem, news_fn=self._news_line)
+                                        memory=self.mem, news_fn=self._news_line,
+                                        weather_alert_fn=self._weather_alert_line)
         if self.reminder.available():
             if reminder_push is not None:
                 print("[提醒] 微信主动提醒已启用：待办到期 + 每日晨报 + 定时打卡将直推微信")
@@ -81,10 +82,18 @@ class XiaoQiBot:
     # ---------- 入口（主线程调用） ----------
 
     def _weather_line(self):
-        """晨报附加天气行（查失败返回 None，晨报照常发）。"""
+        """晨报附加天气行：今日 + 明日（查失败返回 None，晨报照常发）。"""
         try:
-            from weather import fetch_weather
-            return fetch_weather(self.cfg.get("weather_city") or "北京")
+            from weather import fetch_weather, fetch_weather_day
+            city = self.cfg.get("weather_city") or "北京"
+            lines = []
+            w = fetch_weather(city)
+            if w:
+                lines.append(w)
+            t = fetch_weather_day(city, index=1, label="明日")
+            if t:
+                lines.append(t)
+            return "\n".join(lines) if lines else None
         except Exception:
             return None
 
@@ -93,6 +102,14 @@ class XiaoQiBot:
         try:
             from news import fetch_news
             return fetch_news(max_items=3)
+        except Exception:
+            return None
+
+    def _weather_alert_line(self):
+        """天气预警：今天有雨/雪/高温时返回提醒语，否则 None（供 07:30 定时推）。"""
+        try:
+            from weather import fetch_weather_alert
+            return fetch_weather_alert(self.cfg.get("weather_city") or "北京")
         except Exception:
             return None
 
@@ -308,12 +325,31 @@ class XiaoQiBot:
         self._maybe_extract()
 
     def _try_weather(self, text):
-        """天气路由：说「看看今天天气/深圳天气」→ 查 wttr.in → 返回纯文本回复。
+        """天气路由：说「看看今天天气/深圳天气/明天天气/这周天气」→ 查 wttr.in。
         返回 (True, 回复文本) 表示命中并已拿到数据；否则 (False, None)。"""
         if not re.search(r"天气", text or ""):
             return False, None
-        from weather import extract_city, fetch_weather
+        from weather import (extract_city, fetch_weather, fetch_weather_day,
+                             fetch_weather_week)
         city = extract_city(text, self.cfg.get("weather_city") or "北京")
+        # 一周/未来几天
+        if re.search(r"(这周|下周|一周|未来.{0,3}天|最近几天)", text):
+            w = fetch_weather_week(city)
+            if w:
+                return True, w
+            return True, "天气服务暂时没查到 %s 未来几天的天气，稍后再试试" % city
+        # 明天/后天
+        m = re.search(r"(后天)", text)
+        if m:
+            w = fetch_weather_day(city, index=2, label="后天")
+            if w:
+                return True, w
+            return True, "天气服务暂时没查到 %s 后天的天气，稍后再试试" % city
+        if re.search(r"(明天|明日)", text):
+            w = fetch_weather_day(city, index=1, label="明日")
+            if w:
+                return True, w
+            return True, "天气服务暂时没查到 %s 明天的天气，稍后再试试" % city
         w = fetch_weather(city)
         if not w:
             return True, "天气服务暂时没查到 %s 的天气，稍后再试试" % city

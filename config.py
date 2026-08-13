@@ -22,6 +22,7 @@ DEFAULTS = {
     "history_keep": 12,
     "memory_extract_every": 5,
     "weather_city": "北京",   # 天气查询的默认城市（说「今天天气」时用）
+    "weather_alert_time": "07:30",  # 天气预警推送时间（当天有雨/雪/高温才推）
     "dashscope_api_key": "",   # 识图（阿里云百炼 qwen-vl-plus，.env 的 DASHSCOPE_API_KEY）
     "dashscope_model": "qwen-vl-plus",
     "dashscope_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",

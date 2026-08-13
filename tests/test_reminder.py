@@ -263,6 +263,84 @@ def test_clock_wrong_time_no_send(tmp_path):
     assert push.sent == []
 
 
+# ---------- 定时提醒（任意时间点） ----------
+
+def test_timer_due_push_once(tmp_path):
+    push = FakePush()
+    rm, mgr = _make_rm(tmp_path, push=push)
+    mgr.data["timers"] = [{"at": "2026-08-06 09:00", "text": "开会", "fired": False}]
+    assert rm.check_due_timers(datetime.datetime(2026, 8, 6, 9, 1)) == 1
+    assert "开会" in push.sent[0] and "时间到" in push.sent[0]
+    assert rm.check_due_timers(datetime.datetime(2026, 8, 6, 9, 2)) == 0  # 不重复
+
+
+def test_timer_not_due_skipped(tmp_path):
+    push = FakePush()
+    rm, mgr = _make_rm(tmp_path, push=push)
+    mgr.data["timers"] = [{"at": "2026-08-06 15:00", "text": "开会", "fired": False}]
+    assert rm.check_due_timers(datetime.datetime(2026, 8, 6, 9, 0)) == 0
+    assert push.sent == []
+
+
+def test_timer_bad_at_skipped(tmp_path):
+    push = FakePush()
+    rm, mgr = _make_rm(tmp_path, push=push)
+    mgr.data["timers"] = [{"at": "乱写", "text": "x", "fired": False}]
+    assert rm.check_due_timers(datetime.datetime(2026, 8, 6, 9, 0)) == 0
+
+
+# ---------- 节气推送 ----------
+
+def test_season_note_on_term_day(tmp_path):
+    push = FakePush()
+    rm, _ = _make_rm(tmp_path, push=push)
+    assert rm.maybe_send_season_note(datetime.datetime(2026, 8, 7, 8, 0)) is True  # 立秋
+    assert "立秋" in push.sent[0]
+    assert rm.maybe_send_season_note(datetime.datetime(2026, 8, 7, 9, 0)) is False  # 当天不重复
+
+
+def test_season_note_normal_day(tmp_path):
+    push = FakePush()
+    rm, _ = _make_rm(tmp_path, push=push)
+    assert rm.maybe_send_season_note(datetime.datetime(2026, 8, 6, 8, 0)) is False
+    assert push.sent == []
+
+
+def test_day_note_includes_solar_term(tmp_path):
+    rm, _ = _make_rm(tmp_path, push=FakePush(), due=[])
+    assert rm._day_note(datetime.datetime(2026, 8, 7)) == "今天是立秋"
+
+
+# ---------- 天气预警 ----------
+
+def test_weather_alert_sends_on_rain(tmp_path):
+    push = FakePush()
+    rm, _ = _make_rm(tmp_path, push=push)
+    rm._alert_time = "07:30"
+    rm._weather_alert_fn = lambda: "今天深圳天气小雨，出门记得带伞"
+    assert rm.maybe_send_weather_alert(datetime.datetime(2026, 8, 6, 7, 30)) is True
+    assert "带伞" in push.sent[0]
+    assert rm.maybe_send_weather_alert(datetime.datetime(2026, 8, 6, 7, 31)) is False
+
+
+def test_weather_alert_wrong_time(tmp_path):
+    push = FakePush()
+    rm, _ = _make_rm(tmp_path, push=push)
+    rm._alert_time = "07:30"
+    rm._weather_alert_fn = lambda: "带伞"
+    assert rm.maybe_send_weather_alert(datetime.datetime(2026, 8, 6, 8, 0)) is False
+    assert push.sent == []
+
+
+def test_weather_alert_no_alert_skipped(tmp_path):
+    push = FakePush()
+    rm, _ = _make_rm(tmp_path, push=push)
+    rm._alert_time = "07:30"
+    rm._weather_alert_fn = lambda: None  # 今天没雨没高温
+    assert rm.maybe_send_weather_alert(datetime.datetime(2026, 8, 6, 7, 30)) is False
+    assert push.sent == []
+
+
 # ---------- 节日 / 重要日子 ----------
 
 def test_day_note_fixed_holiday(tmp_path):

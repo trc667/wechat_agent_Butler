@@ -39,6 +39,34 @@ FIXED_HOLIDAYS = {
     "12-24": "平安夜", "12-25": "圣诞节",
 }
 
+# 24 节气表（MM-DD -> (名称, 提醒语)；公历日期每年 ±1 天，内置常用值）
+SOLAR_TERMS = {
+    "01-05": ("小寒", "小寒到，注意保暖"),
+    "01-20": ("大寒", "大寒是一年最冷的时候，注意添衣"),
+    "02-04": ("立春", "立春了，万物复苏"),
+    "02-19": ("雨水", "雨水节气，注意防潮"),
+    "03-05": ("惊蛰", "惊蛰到，春雷始鸣"),
+    "03-20": ("春分", "春分昼夜平分"),
+    "04-05": ("清明", "清明节，踏青扫墓"),
+    "04-20": ("谷雨", "谷雨时节，雨生百谷"),
+    "05-05": ("立夏", "立夏了，夏天开始"),
+    "05-21": ("小满", "小满节气，麦粒渐满"),
+    "06-05": ("芒种", "芒种忙种，别误农时"),
+    "06-21": ("夏至", "夏至到了，一年中最长的白天"),
+    "07-07": ("小暑", "小暑到，注意防暑"),
+    "07-22": ("大暑", "大暑是一年最热的时候，注意防暑降温"),
+    "08-07": ("立秋", "立秋了，早晚开始转凉"),
+    "08-23": ("处暑", "处暑出暑，暑气渐消"),
+    "09-07": ("白露", "白露节气，早晚温差大，记得添衣"),
+    "09-23": ("秋分", "秋分昼夜平分"),
+    "10-08": ("寒露", "寒露到，天气转凉，注意添衣"),
+    "10-23": ("霜降", "霜降节气，天气渐冷"),
+    "11-07": ("立冬", "立冬了，冬天开始"),
+    "11-22": ("小雪", "小雪节气，注意保暖"),
+    "12-07": ("大雪", "大雪节气，注意保暖"),
+    "12-21": ("冬至", "冬至到，记得吃饺子"),
+}
+
 # 贴心话（无 emoji、管家口吻）：周一/周五/周末有针对性提示，其余随机挑一条
 _TIPS = [
     "今天想好先做什么了吗？",
@@ -62,12 +90,13 @@ class ReminderManager:
     """待办到期提醒 + 每日晨报。push 可注入（测试/微信直推用），默认走企微客户端。"""
 
     def __init__(self, mgr, cfg, push=None, interval=30, weather_fn=None,
-                 memory=None, news_fn=None):
+                 memory=None, news_fn=None, weather_alert_fn=None):
         self.mgr = mgr                    # LifeManager：读待办/备忘录
         self.cfg = cfg
         self._push_fn = push              # callable(text) -> bool，微信直推用
         self._weather_fn = weather_fn     # callable() -> str/None，晨报附天气
         self._news_fn = news_fn           # callable() -> str/None，晨报附新闻
+        self._weather_alert_fn = weather_alert_fn  # callable() -> str/None，雨/高温预警
         self.memory = memory              # Memory：读重要日子（可选）
         self._client = None               # 企微客户端（兜底）
         self.interval = int(interval)
@@ -76,6 +105,9 @@ class ReminderManager:
         self._digest_last_day = None
         self._digest_time = str((cfg.get("daily_greeting") or {}).get("time", "09:00"))
         self._clock_sent = set()   # (日期, HH:MM) 已发送过的定时提醒，防同一天重复
+        self._season_last_day = None  # 节气推送防重复（每天最多一次）
+        self._alert_last_day = None   # 天气预警防重复（每天最多一次）
+        self._alert_time = str(cfg.get("weather_alert_time") or "07:30")
 
     # ---------- 可用性 ----------
 
@@ -156,13 +188,16 @@ class ReminderManager:
         return random.choice(_TIPS)
 
     def _day_note(self, now, delta=0):
-        """今天/明天是什么日子（固定节日 + 记忆里的重要日子）。无则返回空。"""
+        """今天/明天是什么日子（固定节日 + 节气 + 记忆里的重要日子）。无则返回空。"""
         day = now + datetime.timedelta(days=delta)
         mmdd = day.strftime("%m-%d")
         names = []
         name = FIXED_HOLIDAYS.get(mmdd)
         if name:
             names.append(name)
+        term = SOLAR_TERMS.get(mmdd)
+        if term:
+            names.append(term[0])  # 节气名（如「立秋」）
         if self.memory is not None:
             for d in (self.memory.data.get("important_dates") or []):
                 if d.get("date") == mmdd and d.get("event"):
@@ -231,6 +266,68 @@ class ReminderManager:
                 sent += 1
         return sent
 
+    # ---------- 定时提醒（任意时间点，用户说「下午3点提醒我开会」） ----------
+
+    def check_due_timers(self, now=None):
+        """到点的定时提醒推一次（fired 防重复）。返回推送条数。"""
+        now = now or datetime.datetime.now()
+        timers = self.mgr.data.get("timers") or []
+        due_now = []
+        for t in timers:
+            at = t.get("at") or ""
+            if t.get("fired") or not at:
+                continue
+            try:
+                at_dt = datetime.datetime.strptime(at, "%Y-%m-%d %H:%M")
+            except ValueError:
+                continue
+            if at_dt <= now:
+                t["fired"] = True
+                due_now.append(t)
+        if not due_now:
+            return 0
+        self.mgr.save()
+        for t in due_now:
+            self._send("小管家提醒：%s 时间到" % t["text"])
+        return len(due_now)
+
+    # ---------- 节气/换季推送 ----------
+
+    def maybe_send_season_note(self, now=None):
+        """节气当天推一条节气提醒（每天最多一次，防重复）。返回是否发送。"""
+        now = now or datetime.datetime.now()
+        if self._season_last_day == now.date():
+            return False
+        term = SOLAR_TERMS.get(now.strftime("%m-%d"))
+        if not term:
+            return False
+        if self._send("今日%s：%s" % (term[0], term[1])):
+            self._season_last_day = now.date()
+            return True
+        return False
+
+    # ---------- 天气预警（雨/雪/高温，早上推带伞/防暑） ----------
+
+    def maybe_send_weather_alert(self, now=None):
+        """到点（默认 07:30）查今天天气：有雨/雪/高温才推一条，每天最多一次。"""
+        now = now or datetime.datetime.now()
+        if now.strftime("%H:%M") != self._alert_time:
+            return False
+        if self._alert_last_day == now.date():
+            return False
+        if self._weather_alert_fn is None:
+            return False
+        try:
+            alert = self._weather_alert_fn()
+        except Exception:
+            alert = None
+        if not alert:
+            return False
+        if self._send(alert):
+            self._alert_last_day = now.date()
+            return True
+        return False
+
     def maybe_send_digest(self, now=None):
         """每天到点发一次晨报（当天不重复，可附天气）。返回是否发送。"""
         now = now or datetime.datetime.now()
@@ -264,7 +361,10 @@ class ReminderManager:
         while True:
             try:
                 self.check_due_todos()
+                self.check_due_timers()
                 self.maybe_send_clock_reminders()
+                self.maybe_send_season_note()
+                self.maybe_send_weather_alert()
                 self.maybe_send_digest()
             except Exception as e:
                 print("[提醒] 循环异常: %s" % e)
