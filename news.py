@@ -5,12 +5,40 @@
     text = fetch_news()   # 返回文本（每条新闻一行）；全部源失败返回 None
 """
 
+import os
+import json
 import xml.etree.ElementTree as ET
 
 import requests
 
 # 国内服务走直连，显式禁用系统代理
 _NO_PROXY = {"http": None, "https": None}
+
+# 新闻存档：每天推送的内容存这里，随时可回看历史
+HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "data", "news_history.json")
+
+
+def save_history(date_str, text):
+    """把某天的新闻文本存档（按日期 YYYY-MM-DD 存）。"""
+    try:
+        with open(HISTORY_FILE, encoding="utf-8") as f:
+            hist = json.load(f)
+    except (OSError, ValueError):
+        hist = {}
+    hist[date_str] = text
+    os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(hist, f, ensure_ascii=False, indent=2)
+
+
+def load_history():
+    """读全部新闻存档，返回 {日期: 文本}。"""
+    try:
+        with open(HISTORY_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
 
 # 部分源反爬，带浏览器 UA
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

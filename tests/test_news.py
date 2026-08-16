@@ -85,6 +85,23 @@ def test_ai_score():
     assert news._ai_score("") == 0
 
 
+# ---------- 新闻存档 ----------
+
+def test_save_and_load_history(monkeypatch, tmp_path):
+    f = tmp_path / "news_history.json"
+    monkeypatch.setattr(news, "HISTORY_FILE", str(f))
+    news.save_history("2026-08-14", "周五新闻")
+    news.save_history("2026-08-15", "周六新闻")
+    hist = news.load_history()
+    assert hist["2026-08-14"] == "周五新闻"
+    assert hist["2026-08-15"] == "周六新闻"
+
+
+def test_load_history_missing_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(news, "HISTORY_FILE", str(tmp_path / "no.json"))
+    assert news.load_history() == {}
+
+
 def test_fetch_news_all_fail(monkeypatch):
     def boom(*a, **kw):
         raise OSError("网络错误")

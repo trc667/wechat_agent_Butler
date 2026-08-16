@@ -77,6 +77,40 @@ def test_weather_route_not_triggered_without_keyword(monkeypatch):
     assert handled is False
 
 
+def test_news_query_friday(monkeypatch):
+    """说「看看周五的新闻」→ 返回最近周五的存档。"""
+    from datetime import datetime, timedelta
+    import bot as bot_mod
+
+    class FakeDT:
+        @staticmethod
+        def now():
+            return datetime(2026, 8, 16, 10, 0)  # 周日
+
+        @staticmethod
+        def timedelta(days=0):
+            return timedelta(days=days)
+
+    monkeypatch.setattr(bot_mod, "datetime", FakeDT)
+    monkeypatch.setattr("news.load_history",
+                        lambda: {"2026-08-14": "周五新闻存档内容"})
+    monkeypatch.setattr("news.fetch_news", lambda max_items=5: "今日新闻")
+    b = bot_mod.XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                          send=lambda s, t: None)
+    handled, hint = b._try_news_query("看看周五的新闻")
+    assert handled is True
+    assert "周五新闻存档内容" in hint
+
+
+def test_news_query_not_triggered(monkeypatch):
+    from bot import XiaoQiBot
+
+    b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: None)
+    handled, _ = b._try_news_query("你好呀")
+    assert handled is False
+
+
 def test_image_worker_uses_context(monkeypatch):
     """识图 prompt 应带上最近对话/记忆/备忘录（与已有能力联动）。"""
     from bot import XiaoQiBot

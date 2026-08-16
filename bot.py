@@ -98,12 +98,49 @@ class XiaoQiBot:
             return None
 
     def _news_line(self):
-        """晨报附加科技/AI 新闻（抓失败返回 None，晨报照常发）。"""
+        """晨报附加科技/AI 新闻（抓失败返回 None，晨报照常发），并自动存档可回看。"""
         try:
-            from news import fetch_news
-            return fetch_news(max_items=3)
+            from news import fetch_news, save_history
+            n = fetch_news(max_items=5)
+            if n:
+                save_history(datetime.now().strftime("%Y-%m-%d"), n)
+            return n
         except Exception:
             return None
+
+    def _try_news_query(self, text):
+        """新闻回看路由：说「看看周五的新闻/昨天新闻/今天新闻」→ 返回存档或现抓。"""
+        if not re.search(r"新闻", text or ""):
+            return False, None
+        from news import load_history, fetch_news
+        hist = load_history()
+        # 「周X/星期X的新闻」→ 查最近一个该周几的存档
+        m = re.search(r"(周[一二三四五六日天]|星期[一二三四五六日天])", text)
+        if m:
+            names = {"周一": 0, "周二": 1, "周三": 2, "周四": 3,
+                     "周五": 4, "周六": 5, "周日": 6}
+            idx = names.get(m.group(1))
+            if idx is not None:
+                today = datetime.now().date()
+                delta = (today.weekday() - idx) % 7
+                key = (today - datetime.timedelta(days=delta)).strftime("%Y-%m-%d")
+                if key in hist:
+                    return True, hist[key]
+                return True, ("%s 的新闻还没有存档（存档从上线后开始），"
+                              "今天的最新新闻是：\n%s" % (m.group(1), fetch_news(5) or "暂无"))
+        # 「昨天/前天」
+        m = re.search(r"(昨天|前天)", text)
+        if m:
+            days = 1 if m.group(1) == "昨天" else 2
+            key = (datetime.now().date() - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
+            if key in hist:
+                return True, hist[key]
+            return True, "%s 的新闻还没有存档" % m.group(1)
+        # 默认：今天现抓最新新闻
+        n = fetch_news(5)
+        if n:
+            return True, n
+        return False, None
 
     def _weather_alert_line(self):
         """天气预警：今天有雨/雪/高温时返回提醒语，否则 None（供 07:30 定时推）。"""
@@ -299,6 +336,12 @@ class XiaoQiBot:
         if self._handle_image_confirm(sender, text):
             return
         handled, hint = self.mgr.handle(text, self.ds)
+        if not handled:  # 不是管家命令，试试新闻回看
+            handled, hint = self._try_news_query(text)
+            if handled:
+                self._send(sender, hint)
+                self.mem.append_history("assistant", hint)
+                return
         if not handled:  # 不是管家命令，试试天气
             handled, hint = self._try_weather(text)
             if handled:  # 天气是确定性数据，直接发，不走模型（避免带出备忘录/多说话）
