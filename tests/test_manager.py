@@ -125,6 +125,70 @@ def test_timer_not_triggered_by_normal_chat(tmp_path):
     assert handled is False
 
 
+# ---------- 定时提醒管理（查/取消） ----------
+
+def _seed_timers(mgr):
+    mgr.data["timers"] = [
+        {"at": "2026-08-06 15:00", "text": "开会", "fired": False},
+        {"at": "2026-08-07 09:00", "text": "交周报", "fired": False},
+        {"at": "2026-08-05 10:00", "text": "已触发", "fired": True},
+    ]
+
+
+def test_hint_timers_lists_pending(tmp_path):
+    mgr = _make_mgr(tmp_path)
+    _seed_timers(mgr)
+    handled, hint = mgr.handle("我有哪些提醒", None)
+    assert handled is True
+    assert "开会" in hint and "交周报" in hint
+    assert "已触发" not in hint  # 已触发的列出
+
+
+def test_hint_timers_empty(tmp_path):
+    mgr = _make_mgr(tmp_path)
+    handled, hint = mgr.handle("看看提醒", None)
+    assert handled is True
+    assert "没有" in hint
+
+
+def test_cancel_timer_route(tmp_path):
+    """「取消3点的提醒」→ 取消提醒（不是完成待办）。"""
+    mgr = _make_mgr(tmp_path)
+    _seed_timers(mgr)
+    handled, hint = mgr.handle("取消15点的提醒", None)
+    assert handled is True
+    assert "开会" in hint
+    assert len(mgr.data["timers"]) == 2  # 删掉一条
+    assert not any(t["text"] == "开会" for t in mgr.data["timers"])
+
+
+def test_cancel_timer_by_text(tmp_path):
+    mgr = _make_mgr(tmp_path)
+    _seed_timers(mgr)
+    handled, _ = mgr.handle("忘掉交周报的提醒", None)
+    assert handled is True
+    assert not any(t["text"] == "交周报" for t in mgr.data["timers"])
+
+
+def test_cancel_timer_not_found(tmp_path):
+    mgr = _make_mgr(tmp_path)
+    _seed_timers(mgr)
+    handled, hint = mgr.handle("取消不存在的提醒", None)
+    assert handled is True
+    assert "没找到" in hint
+    assert len(mgr.data["timers"]) == 3  # 没删
+
+
+def test_cancel_todo_still_works(tmp_path):
+    """「取消交房租」仍走待办完成，不受提醒取消影响。"""
+    mgr = _make_mgr(tmp_path)
+    mgr.data["todos"] = [{"text": "交房租", "due": "", "done": False,
+                           "reminded": False}]
+    handled, hint = mgr.handle("取消交房租", None)
+    assert handled is True
+    assert mgr.data["todos"][0]["done"] is True
+
+
 def test_route_empty_text(tmp_path):
     mgr = _make_mgr(tmp_path)
     handled, hint = mgr.handle("   ", FakeDS())

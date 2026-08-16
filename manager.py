@@ -119,12 +119,19 @@ class LifeManager:
             return True, self._hint_todos()
         if t.startswith(("记一下", "帮我记", "记着")):
             return True, self._add_todo(t, deepseek)
+        # 取消定时提醒优先于备忘/待办删除（「忘掉3点的提醒」→ 提醒；「忘掉测试环境地址」→ 备忘）
+        m = re.match(r"^(取消|删掉|删除|忘掉|关掉)\s*(.+?提醒.*)$", t)
+        if m:
+            return True, self._del_timer(m.group(2))
         m = re.match(r"^(忘掉|删掉|删除)\s*(.+)$", t)
         if m:
             return True, self._del_memo(m.group(2))
         m = re.match(r"^(完成了|办完了|搞定|做完了|取消)\s*(.+)$", t)
         if m:
             return True, self._done_todo(m.group(2))
+        # 查定时提醒（「我有哪些提醒」「看看提醒」）
+        if re.search(r"(有哪些|列表|看看|什么).{0,4}提醒|提醒.{0,4}(有哪些|列表|看看|什么)", t):
+            return True, self._hint_timers()
         if re.search(r"(提醒我|提醒一下|定时提醒)", t):
             return True, self._add_timer(t, deepseek)
         return False, None
@@ -235,6 +242,42 @@ class LifeManager:
                 "简短告诉他没找到，问他要删的是哪条。）" % kw)
 
     # ---------- 定时提醒 ----------
+
+    def _hint_timers(self):
+        """列未触发的定时提醒。"""
+        pending = [t for t in self.data["timers"] if not t.get("fired")]
+        if not pending:
+            return ("（内部消息：用户查定时提醒，目前一个都没有。"
+                    "简短告诉他现在没有待提醒的事。）")
+        items = "；".join("%s（%s）" % (t["text"], t["at"][5:16]) for t in pending)
+        return ("（内部消息：用户查定时提醒，未触发的共%d条：%s。"
+                "简短像聊天一样列给他。）" % (len(pending), items))
+
+    def _del_timer(self, kw):
+        """「取消3点的提醒」「删掉开会提醒」→ 找到未触发的定时提醒删掉。"""
+        kw = kw.replace("提醒", "").strip("，。:：,; \t")
+        pending = [t for t in self.data["timers"] if not t.get("fired")]
+        hits = [t for t in pending
+                if kw in t["text"] or kw in t["at"] or t["text"] in kw]
+        # 时间词匹配：「15点的」→ 匹配 at 里 15:00 那条
+        m = re.search(r"(\d{1,2})点", kw)
+        if m:
+            hour = str(int(m.group(1)))
+            for t in pending:
+                if t not in hits and t["at"][11:13].lstrip("0") == hour:
+                    hits.append(t)
+        if len(hits) == 1:
+            self.data["timers"].remove(hits[0])
+            self.save()
+            print("[管家] 取消提醒：%s @ %s" % (hits[0]["text"], hits[0]["at"]))
+            return ("（内部消息：用户取消了定时提醒「%s」（%s）。"
+                    "简短确认一句。）" % (hits[0]["text"], hits[0]["at"][5:16]))
+        if len(hits) > 1:
+            names = "；".join("%s（%s）" % (t["text"], t["at"][5:16]) for t in hits)
+            return ("（内部消息：用户要取消提醒「%s」，但匹配到好几条：%s。"
+                    "简短问他要取消哪一条。）" % (kw, names))
+        return ("（内部消息：用户要取消提醒「%s」，但你翻了翻没找到这条。"
+                "简短告诉他没找到，可以问「我有哪些提醒」。）" % kw)
 
     def _add_timer(self, t, ds):
         """「下午3点提醒我开会」→ 存一条定时提醒，到点由 reminder 推微信。"""
