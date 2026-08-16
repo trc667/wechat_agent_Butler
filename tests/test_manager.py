@@ -37,6 +37,49 @@ def test_route_memo_query_empty(tmp_path):
     assert "没有记任何东西" in hint
 
 
+# ---------- 备忘录更新（用户说"不正确"时更新而非去重） ----------
+
+def test_add_memo_updates_similar(tmp_path):
+    """同主题但内容不同（如地址变了）：重新记住 = 更新替换，不新增。"""
+    mgr = _make_mgr(tmp_path)
+    mgr.handle("记住线上测试环境地址 http://10.10.0.8:8080", None)
+    handled, hint = mgr.handle("记住线上测试环境地址 http://10.10.0.9:9090", None)
+    assert handled is True
+    assert len(mgr.data["memos"]) == 1  # 不新增
+    assert mgr.data["memos"][0]["text"] == "线上测试环境地址 http://10.10.0.9:9090"
+    assert "更新" in hint
+
+
+def test_add_memo_exact_still_dedup(tmp_path):
+    """完全相同的内容仍然去重（防重复堆叠）。"""
+    mgr = _make_mgr(tmp_path)
+    mgr.handle("记住测试环境地址 http://x", None)
+    handled, hint = mgr.handle("记住测试环境地址 http://x", None)
+    assert handled is True
+    assert "记过" in hint
+    assert len(mgr.data["memos"]) == 1
+
+
+def test_update_memo_replace(tmp_path):
+    """「改一下xxx为yyy」→ 找到旧条目替换。"""
+    mgr = _make_mgr(tmp_path)
+    mgr.handle("记住测试环境地址 http://10.10.0.8:8080", None)
+    handled, hint = mgr.handle("改一下测试环境地址为 http://192.168.1.1:9000", None)
+    assert handled is True
+    assert len(mgr.data["memos"]) == 1
+    assert "192.168.1.1:9000" in mgr.data["memos"][0]["text"]
+    assert "更新" in hint
+
+
+def test_update_memo_no_match_appends(tmp_path):
+    """更新不存在的条目：作为新备忘存下。"""
+    mgr = _make_mgr(tmp_path)
+    handled, hint = mgr.handle("改一下公司门禁密码为 123456", None)
+    assert handled is True
+    assert len(mgr.data["memos"]) == 1
+    assert "门禁密码" in mgr.data["memos"][0]["text"]
+
+
 def test_route_plain_chat_passthrough(tmp_path):
     mgr = _make_mgr(tmp_path)
     handled, hint = mgr.handle("今天天气怎么样", FakeDS())
@@ -141,9 +184,10 @@ def test_del_memo_exact_hit(tmp_path):
 
 def test_del_memo_multiple_hits_asks(tmp_path):
     mgr = _make_mgr(tmp_path)
-    mgr.handle("记住测试环境地址A", FakeDS())
-    mgr.handle("记住测试环境地址B", FakeDS())
-    handled, hint = mgr.handle("忘掉测试环境地址", FakeDS())
+    # 两条都含关键词但内容不同（不会被自动合并），删除时需用户确认是哪条
+    mgr.handle("记住线上测试环境地址 http://10.10.0.8:8080", FakeDS())
+    mgr.handle("记住测试环境管理员账号 admin/123", FakeDS())
+    handled, hint = mgr.handle("忘掉测试环境", FakeDS())
     assert handled is True
     assert "好几条" in hint
     assert len(mgr.data["memos"]) == 2  # 没删，等用户确认

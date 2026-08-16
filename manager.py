@@ -70,6 +70,12 @@ def _parse_json(raw):
         return None
 
 
+def _ratio(a, b):
+    """文本相似度 0~1（difflib）。用于判断两条备忘是不是同一主题的修订。"""
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, a or "", b or "").ratio()
+
+
 class LifeManager:
     """备忘录/待办的存储与路由。handle() 返回 (handled, hint)。"""
 
@@ -104,6 +110,9 @@ class LifeManager:
             return False, None
         if re.search(r"(备忘录|记过什么|记住了什么|记了什么)", t):
             return True, self._hint_memos()
+        # 更新/纠正：先说更新，再匹配旧条目替换（优先级高于「记住」去重）
+        if re.search(r"(更新备忘录|改一下|改掉|纠正|写错了|修改备忘|备忘.{0,6}不对|不对.{0,6}备忘)", t):
+            return True, self._update_memo(t)
         if t.startswith(("记住", "记下", "备忘", "帮我记住")):
             return True, self._add_memo(t)
         if re.search(r"(待办|清单|有什么要(做|干的))", t):
@@ -140,10 +149,23 @@ class LifeManager:
             text = t
         if not text:
             return ("（内部消息：用户说让你记住点什么，但没说内容。简短问他要记什么。）")
-        # 去重：内容相同的备忘录不再重复存（避免晨报/查询里一堆重复）
+        # 完全相同：去重（避免重复堆叠）
         if any(m["text"] == text for m in self.data["memos"]):
             return ("（内部消息：用户让你记住：%s。这条备忘已经记过了，不用再重复记。"
                     "简短告诉他这条之前已记下。）" % text)
+        # 相似但内容不同（如同一条信息修订/更新）：用新内容替换旧条目，不新增。
+        # 仅限较长文本（>=6 字）做相似合并，短备忘（如「买牛奶」「密码1」）避免误判
+        similar = [m for m in self.data["memos"]
+                   if len(text) >= 6 and len(m["text"]) >= 6
+                   and _ratio(m["text"], text) >= 0.6]
+        if similar:
+            old = similar[0]["text"]
+            similar[0]["text"] = text
+            similar[0]["ts"] = int(time.time())
+            self.save()
+            print("[管家] 更新备忘：%s -> %s" % (old, text))
+            return ("（内部消息：用户重新说「%s」，和已有备忘「%s」是同一件事，"
+                    "你已把它更新为新内容。简短确认一句，比如告诉他已更新。）" % (text, old))
         self.data["memos"].append({"text": text, "ts": int(time.time())})
         if len(self.data["memos"]) > 30:      # 最多留 30 条，旧的先淘汰
             self.data["memos"] = self.data["memos"][-30:]
@@ -151,6 +173,43 @@ class LifeManager:
         print("[管家] 备忘：%s" % text)
         return ("（内部消息：用户刚让你记住：%s。已存进备忘录。"
                 "简短确认一句，一两句，别复述这条消息。）" % text)
+
+    def _update_memo(self, t):
+        """「改一下测试环境地址为 http://x」「备忘里的地址不对」→ 找到旧条目替换。"""
+        text = t
+        for p in ("更新备忘录", "纠正一下", "改一下", "改掉", "写错了",
+                  "纠正", "改成", "修改备忘", "修改", "更新", "不对", "不是"):
+            if text.startswith(p):
+                text = text[len(p):]
+                break
+        text = text.strip("，。:：,; \t")
+        text = re.sub(r"^(备忘|备忘录)[里中]的?", "", text).strip("，。:：,; \t")
+        if not text:
+            return ("（内部消息：用户想改备忘录，但没说改成什么。"
+                    "简短问他要更新成什么内容。）")
+        # 找最相似的旧条目（0.3 即视为同主题；同样要求较长文本避免短串误匹配）
+        best, best_r = None, 0.0
+        if len(text) >= 6:
+            for m in self.data["memos"]:
+                if len(m["text"]) < 6:
+                    continue
+                r = _ratio(m["text"], text)
+                if r > best_r:
+                    best, best_r = m, r
+        if best and best_r >= 0.3:
+            old = best["text"]
+            best["text"] = text
+            best["ts"] = int(time.time())
+            self.save()
+            print("[管家] 更新备忘：%s -> %s" % (old, text))
+            return ("（内部消息：用户要把备忘录「%s」更新为「%s」。"
+                    "简短确认一句，比如告诉他已更新。）" % (old, text))
+        # 没找到原条目：作为新备忘存下
+        self.data["memos"].append({"text": text, "ts": int(time.time())})
+        self.save()
+        print("[管家] 备忘（更新未命中新增）：%s" % text)
+        return ("（内部消息：用户想更新备忘录「%s」，但你翻了翻没找到原来的条目，"
+                "已作为新备忘记下。简短说明。）" % text)
 
     def _hint_memos(self):
         memos = self.data["memos"]
