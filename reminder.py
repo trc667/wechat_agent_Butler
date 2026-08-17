@@ -261,8 +261,9 @@ class ReminderManager:
             if key in self._clock_sent:
                 continue
             text = item.get("text") or "到时间啦，记得打卡"
+            # 无论成败都标记：token 过期等失败原因短时间内重试无意义，避免 30 秒刷屏
+            self._clock_sent.add(key)
             if self._send(text):
-                self._clock_sent.add(key)
                 sent += 1
         return sent
 
@@ -301,10 +302,8 @@ class ReminderManager:
         term = SOLAR_TERMS.get(now.strftime("%m-%d"))
         if not term:
             return False
-        if self._send("今日%s：%s" % (term[0], term[1])):
-            self._season_last_day = now.date()
-            return True
-        return False
+        self._season_last_day = now.date()  # 失败也标记，防刷屏
+        return self._send("今日%s：%s" % (term[0], term[1]))
 
     # ---------- 天气预警（雨/雪/高温，早上推带伞/防暑） ----------
 
@@ -323,10 +322,8 @@ class ReminderManager:
             alert = None
         if not alert:
             return False
-        if self._send(alert):
-            self._alert_last_day = now.date()
-            return True
-        return False
+        self._alert_last_day = now.date()  # 失败也标记，防刷屏
+        return self._send(alert)
 
     def maybe_send_digest(self, now=None):
         """每天到点发一次晨报（当天不重复，可附天气）。返回是否发送。"""
@@ -353,6 +350,7 @@ class ReminderManager:
         if self._send(text):
             self._digest_last_day = now.date()
             return True
+        self._digest_last_day = now.date()  # 失败也标记：token 过期重试无意义，防刷屏
         return False
 
     # ---------- 线程 ----------
