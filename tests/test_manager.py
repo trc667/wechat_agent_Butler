@@ -305,6 +305,51 @@ def test_task_del_not_found(tmp_path):
     assert len(mgr.data["tasks"]) == 1
 
 
+# ---------- 定时任务修改（改时间） ----------
+
+def test_task_update_time_route(tmp_path):
+    """「把推每日单曲的时间改成早上八点」→ 更新任务时间。"""
+    mgr = _make_mgr(tmp_path)
+    mgr.add_task_direct("daily", "每日单曲", time="09:00", action="music")
+    ds = FakeDS(raw=json.dumps({"keyword": "每日单曲", "time": "08:00"}))
+    handled, hint = mgr.handle("把推每日单曲的时间改成早上八点", ds)
+    assert handled is True
+    assert mgr.data["tasks"][0]["time"] == "08:00"
+    assert "08:00" in hint and "每日单曲" in hint
+
+
+def test_task_update_weekday_route(tmp_path):
+    """「把查天气改成每周五」→ weekday 更新。"""
+    mgr = _make_mgr(tmp_path)
+    mgr.add_task_direct("daily", "查天气", time="09:00", action="weather")
+    ds = FakeDS(raw=json.dumps({"keyword": "查天气", "time": "09:00", "weekday": 4}))
+    handled, hint = mgr.handle("把查天气改成每周五", ds)
+    assert handled is True
+    t = mgr.data["tasks"][0]
+    assert t["type"] == "weekly" and t["weekday"] == 4
+    assert "每周五" in hint
+
+
+def test_task_update_not_found(tmp_path):
+    mgr = _make_mgr(tmp_path)
+    mgr.add_task_direct("daily", "查天气", time="09:00")
+    ds = FakeDS(raw=json.dumps({"keyword": "不存在的任务", "time": "08:00"}))
+    handled, hint = mgr.handle("把不存在的任务改成早上8点", ds)
+    assert handled is True
+    assert "没找到" in hint
+    assert mgr.data["tasks"][0]["time"] == "09:00"  # 没改
+
+
+def test_task_update_no_time_extracted(tmp_path):
+    mgr = _make_mgr(tmp_path)
+    mgr.add_task_direct("daily", "查天气", time="09:00")
+    ds = FakeDS(raw=json.dumps({"keyword": "查天气", "time": ""}))
+    handled, hint = mgr.handle("把查天气的时间改一下", ds)
+    assert handled is True
+    assert "几点" in hint  # 提示要说明时间
+    assert mgr.data["tasks"][0]["time"] == "09:00"
+
+
 def test_hint_tasks_includes_system_items(tmp_path):
     """带 cfg 时，打卡提醒/晨报/天气预警/睡前总结也会列出来。"""
     cfg = {

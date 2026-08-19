@@ -61,6 +61,16 @@ EXTRACT_TASK = """你是定时任务提取助手。今天日期：{date}（{week
 - 内容去掉语气词和称呼，简短
 对话：{text}"""
 
+# 通用定时任务修改提示词：把「推每日单曲的时间改成早上八点」转成关键词+新时间
+EXTRACT_TASK_UPDATE = """你是定时任务修改助手。从下面这句话里提取要修改的「任务关键词」和「新时间」。
+只输出一个 JSON：
+{{"keyword": "任务内容关键词（如 每日单曲/查天气/写周报），从原话提取，没提到就空字符串", "time": "HH:MM 24小时制或空", "weekday": 0-6 或空(仅weekly用，0=周一), "at": "YYYY-MM-DD HH:MM 或空"}}
+规则：
+- 早上8点=08:00，下午5点=17:00，晚上10点=22:00，8点=08:00
+- 提到「每周X」→ weekday；只提到时刻 → 只改 time
+- 提到具体日期（明天/某月某日）→ at
+对话：{text}"""
+
 # 待办提取提示词：只有记待办时用小调用，日期换算靠模型（喂了今天日期）
 EXTRACT_TODO = """你是待办提取助手。今天日期：{date}（{weekday}）。
 从下面这句话里提取「要做的事」和「截止日期」，只输出一个 JSON：
@@ -125,6 +135,10 @@ class LifeManager:
             return False, None
         if re.search(r"(备忘录|记过什么|记住了什么|记了什么)", t):
             return True, self._hint_memos()
+        # 改定时任务时间（「把每日单曲的时间改成早上8点」「把查天气的时间改一下」）优先于备忘更新/新增
+        if re.search(r"(改成|改为|改到|调整|调到|修改|改一下|改)", t) and re.search(
+                r"(时间|点|单曲|天气|推送|任务)", t):
+            return True, self._update_task(t, deepseek)
         # 更新/纠正：先说更新，再匹配旧条目替换（优先级高于「记住」去重）
         if re.search(r"(更新备忘录|改一下|改掉|纠正|写错了|修改备忘|备忘.{0,6}不对|不对.{0,6}备忘)", t):
             return True, self._update_memo(t)
@@ -523,6 +537,64 @@ class LifeManager:
                     "简短问他要取消哪一条。）" % (kw or "全部", names))
         return ("（内部消息：用户要取消任务「%s」，但你翻了翻没找到。"
                 "简短告诉他没找到，可以问「我有哪些定时任务」。）" % kw)
+
+    # ---------- 定时任务修改（改时间/星期，说「把每日单曲改成早上8点」） ----------
+
+    def _update_task(self, t, ds):
+        """模型提取关键词+新时间，更新已存在的定时任务。返回内部消息。"""
+        now = datetime.datetime.now()
+        prompt = (EXTRACT_TASK_UPDATE.replace("{date}", now.strftime("%Y年%m月%d日"))
+                                     .replace("{weekday}", WEEKDAYS[now.weekday()])
+                                     .replace("{now}", now.strftime("%H:%M"))
+                                     .replace("{text}", t))
+        try:
+            raw = ds.chat([{"role": "system", "content": "只输出 JSON。"},
+                           {"role": "user", "content": prompt}],
+                          temperature=0.2, max_tokens=200)
+        except Exception:
+            raw = ""
+        r = _parse_json(raw) or {}
+        keyword = str(r.get("keyword", "") or "").strip()
+        time_s = str(r.get("time", "") or "").strip()
+        weekday = r.get("weekday")
+        at = str(r.get("at", "") or "").strip()
+        # 匹配任务：有关键词按内容匹配；没关键词要求只有一条任务
+        tasks = self.data["tasks"]
+        if keyword:
+            hits = [x for x in tasks if keyword in x["text"] or x["text"] in keyword]
+        else:
+            hits = tasks if len(tasks) == 1 else []
+        if not hits:
+            return ("（内部消息：用户要改定时任务「%s」的时间，但你翻了翻没找到这条任务。"
+                    "简短告诉他没找到，可以问「定时任务是哪些」。）" % (keyword or "指定"))
+        if len(hits) > 1:
+            names = "；".join("%s：%s" % (self._task_desc(x), x["text"]) for x in hits)
+            return ("（内部消息：用户要改时间，但匹配到好几条任务：%s。"
+                    "简短问他要改哪一条。）" % names)
+        task = hits[0]
+        changed = []
+        if time_s and re.match(r"^\d{2}:\d{2}$", time_s):
+            task["time"] = time_s
+            changed.append("时间改为 %s" % time_s)
+        if weekday is not None:
+            try:
+                task["weekday"] = int(weekday) % 7
+                if task.get("type") == "daily":
+                    task["type"] = "weekly"
+                changed.append("改为每周%s" % WEEKDAYS[int(weekday) % 7][-1:])
+            except (TypeError, ValueError):
+                pass
+        if at and re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", at):
+            task["at"] = at
+            task["type"] = "once"
+            changed.append("改为 %s 执行" % at)
+        if not changed:
+            return ("（内部消息：用户要改定时任务时间，但没提取出新的时间。"
+                    "简短问他要改成几点，比如「改成早上8点」。）")
+        self.save()
+        print("[管家] 改定时任务：%s -> %s" % (task["text"], changed))
+        return ("（内部消息：用户把定时任务「%s」%s。简短确认一句。）"
+                % (task["text"], "，".join(changed)))
 
     def add_todo_direct(self, text, due=""):
         """直接存一条待办（工具用：text/due 由模型给出）。返回给模型的文本结果。"""
