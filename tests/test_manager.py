@@ -9,11 +9,14 @@ from manager import LifeManager
 class FakeDS:
     """可参数化的假模型：默认返回"交房租"待办，也可指定其他内容。"""
 
-    def __init__(self, text="交房租", due="2026-08-05"):
+    def __init__(self, text="交房租", due="2026-08-05", raw=None):
         self.text = text
         self.due = due
+        self.raw = raw
 
     def chat(self, messages, **kw):
+        if self.raw:
+            return self.raw
         return json.dumps({"text": self.text, "due": self.due})
 
 
@@ -187,6 +190,95 @@ def test_cancel_todo_still_works(tmp_path):
     handled, hint = mgr.handle("取消交房租", None)
     assert handled is True
     assert mgr.data["todos"][0]["done"] is True
+
+
+# ---------- 通用定时任务（每天/每周/一次） ----------
+
+def test_task_daily_route_and_store(tmp_path):
+    """「每天早上9点查天气」→ 模型提取 daily 规则存入 tasks。"""
+    mgr = _make_mgr(tmp_path)
+    ds = FakeDS(raw=json.dumps({"type": "daily", "time": "09:00",
+                                "text": "查天气", "action": "weather"}))
+    handled, hint = mgr.handle("每天早上9点查天气推给我", ds)
+    assert handled is True
+    assert len(mgr.data["tasks"]) == 1
+    t = mgr.data["tasks"][0]
+    assert t["type"] == "daily" and t["time"] == "09:00"
+    assert t["action"] == "weather"
+
+
+def test_task_weekly_route_and_store(tmp_path):
+    """「每周五下午5点提醒我写周报」→ weekly 规则，weekday=4。"""
+    mgr = _make_mgr(tmp_path)
+    ds = FakeDS(raw=json.dumps({"type": "weekly", "time": "17:00",
+                                "weekday": 4, "text": "写周报",
+                                "action": "remind"}))
+    handled, hint = mgr.handle("每周五下午5点提醒我写周报", ds)
+    assert handled is True
+    t = mgr.data["tasks"][0]
+    assert t["type"] == "weekly" and t["weekday"] == 4 and t["time"] == "17:00"
+
+
+def test_task_once_route_and_store(tmp_path):
+    """「设个定时任务明天上午10点提醒我开会」→ once 规则。"""
+    mgr = _make_mgr(tmp_path)
+    ds = FakeDS(raw=json.dumps({"type": "once", "at": "2026-08-20 10:00",
+                                "text": "开会", "action": "remind"}))
+    handled, hint = mgr.handle("设个定时任务明天上午10点提醒我开会", ds)
+    assert handled is True
+    t = mgr.data["tasks"][0]
+    assert t["type"] == "once" and t["at"] == "2026-08-20 10:00"
+    assert t["fired"] is False
+
+
+def test_task_bad_extract_falls_back(tmp_path):
+    """模型完全没输出 JSON → 提示没听清，不落库。"""
+    mgr = _make_mgr(tmp_path)
+    handled, hint = mgr.handle("每天早上9点查天气", BadDS())
+    assert handled is True
+    assert "没听清" in hint
+    assert mgr.data["tasks"] == []
+
+
+def test_task_bad_type_extract_falls_back(tmp_path):
+    """模型输出了内容但类型非法 → 提示说清重复规律，不落库。"""
+    mgr = _make_mgr(tmp_path)
+    ds = FakeDS(raw=json.dumps({"type": "hourly", "time": "09:00",
+                                "text": "查天气", "action": "remind"}))
+    handled, hint = mgr.handle("每天早上9点查天气", ds)
+    assert handled is True
+    assert "规律" in hint
+    assert mgr.data["tasks"] == []
+
+
+def test_task_add_direct(tmp_path):
+    mgr = _make_mgr(tmp_path)
+    out = mgr.add_task_direct("weekly", "写周报", time="17:00", weekday=4)
+    assert "已设置" in out and "每周五" in out
+    assert mgr.data["tasks"][0]["weekday"] == 4
+
+
+def test_task_hint_and_cancel(tmp_path):
+    mgr = _make_mgr(tmp_path)
+    mgr.add_task_direct("daily", "查天气", time="09:00", action="weather")
+    mgr.add_task_direct("weekly", "写周报", time="17:00", weekday=4)
+    handled, hint = mgr.handle("我有哪些定时任务", None)
+    assert handled is True
+    assert "每天 09:00" in hint and "每周五 17:00" in hint
+    # 取消「每天早上9点的天气推送」
+    handled, hint = mgr.handle("取消每天早上9点的天气推送", None)
+    assert handled is True
+    assert len(mgr.data["tasks"]) == 1
+    assert mgr.data["tasks"][0]["text"] == "写周报"
+
+
+def test_task_del_not_found(tmp_path):
+    mgr = _make_mgr(tmp_path)
+    mgr.add_task_direct("daily", "查天气", time="09:00")
+    handled, hint = mgr.handle("取消每周五的提醒", None)
+    assert handled is True
+    assert "没找到" in hint
+    assert len(mgr.data["tasks"]) == 1
 
 
 def test_route_empty_text(tmp_path):

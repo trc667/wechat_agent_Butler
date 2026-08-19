@@ -56,6 +56,44 @@ def test_timer_add_bad_time(tmp_path):
     assert "时间格式" in out
 
 
+# ---------- 通用定时任务（重复性） ----------
+
+def test_task_add_daily_weather(tmp_path):
+    ctx, mgr = _make_ctx(tmp_path)
+    out = tools.dispatch("task_add", {"type": "daily", "time": "09:00",
+                                      "text": "查天气", "action": "weather"}, ctx)
+    assert "每天 09:00" in out
+    t = mgr.data["tasks"][0]
+    assert t["type"] == "daily" and t["action"] == "weather"
+
+
+def test_task_add_weekly(tmp_path):
+    ctx, mgr = _make_ctx(tmp_path)
+    out = tools.dispatch("task_add", {"type": "weekly", "time": "17:00",
+                                      "weekday": "4", "text": "写周报"}, ctx)
+    assert "每周五" in out
+    assert mgr.data["tasks"][0]["weekday"] == 4
+
+
+def test_task_list_and_cancel(tmp_path):
+    ctx, mgr = _make_ctx(tmp_path)
+    tools.dispatch("task_add", {"type": "daily", "time": "09:00",
+                                "text": "查天气", "action": "weather"}, ctx)
+    tools.dispatch("task_add", {"type": "weekly", "time": "17:00",
+                                "weekday": "4", "text": "写周报"}, ctx)
+    out = tools.dispatch("task_list", {}, ctx)
+    assert "每天 09:00" in out and "每周五 17:00" in out
+    out = tools.dispatch("task_cancel", {"keyword": "写周报"}, ctx)
+    assert "取消" in out
+    assert len(mgr.data["tasks"]) == 1
+
+
+def test_task_add_bad_type(tmp_path):
+    ctx, _ = _make_ctx(tmp_path)
+    out = tools.dispatch("task_add", {"type": "hourly", "text": "x"}, ctx)
+    assert "daily/weekly/once" in out
+
+
 # ---------- 天气 / 新闻（mock 网络） ----------
 
 def test_weather_query_today(monkeypatch, tmp_path):

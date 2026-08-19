@@ -325,6 +325,50 @@ class ReminderManager:
         self._alert_last_day = now.date()  # 失败也标记，防刷屏
         return self._send(alert)
 
+    # ---------- 通用定时任务（每天/每周/一次，用户说「每天早上9点查天气」） ----------
+
+    def check_due_tasks(self, now=None):
+        """到点的定时任务执行一次（daily/weekly 按天防重，once 触发即失效）。
+        返回执行条数。action=weather 推天气数据，否则推提醒文本。"""
+        now = now or datetime.datetime.now()
+        tasks = self.mgr.data.get("tasks") or []
+        due_now = []
+        today = now.strftime("%Y-%m-%d")
+        hhmm = now.strftime("%H:%M")
+        with self._lock:
+            for tk in tasks:
+                typ = tk.get("type")
+                if typ == "once":
+                    if tk.get("fired") or not tk.get("at"):
+                        continue
+                    if tk["at"] <= now.strftime("%Y-%m-%d %H:%M"):
+                        tk["fired"] = True
+                        due_now.append(tk)
+                else:  # daily / weekly
+                    if tk.get("last_fired") == today:
+                        continue
+                    if tk.get("time") != hhmm:
+                        continue
+                    if typ == "weekly" and tk.get("weekday") != now.weekday():
+                        continue
+                    tk["last_fired"] = today
+                    due_now.append(tk)
+            if not due_now:
+                return 0
+            self.mgr.save()
+        for tk in due_now:
+            if tk.get("action") == "weather" and self._weather_fn is not None:
+                try:
+                    w = self._weather_fn()
+                except Exception:
+                    w = None
+                if w:
+                    self._send(w)
+                    continue
+            text = tk.get("text") or "定时任务"
+            self._send("小管家提醒：%s 时间到" % text)
+        return len(due_now)
+
     def maybe_send_digest(self, now=None):
         """每天到点发一次晨报（当天不重复，可附天气）。返回是否发送。"""
         now = now or datetime.datetime.now()
@@ -360,6 +404,7 @@ class ReminderManager:
             try:
                 self.check_due_todos()
                 self.check_due_timers()
+                self.check_due_tasks()
                 self.maybe_send_clock_reminders()
                 self.maybe_send_season_note()
                 self.maybe_send_weather_alert()

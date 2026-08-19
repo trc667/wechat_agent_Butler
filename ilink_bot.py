@@ -69,7 +69,7 @@ def main():
     print("  Bot ID: %s" % client.bot_id)
     print("  模型:   %s" % cfg.get("model"))
     print("  现在去微信里给「小管家」发消息吧！")
-    print("  （支持主动推送：待办到期/每日晨报/定时打卡直推微信）")
+    print("  （支持主动推送：待办到期/每日晨报/打卡/定时任务直推微信）")
     print("  按 Ctrl+C 退出")
     print("=" * 46)
 

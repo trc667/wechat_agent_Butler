@@ -206,6 +206,74 @@ def test_digest_news_failure_keeps_digest(tmp_path):
     assert "早安" in rm._push_fn.sent[0]
 
 
+# ---------- 通用定时任务（每天/每周/一次） ----------
+
+def test_task_daily_fires_once_per_day(tmp_path):
+    """每天任务到点执行一次，同一天不重复。"""
+    push = FakePush()
+    rm, mgr = _make_rm(tmp_path, push=push)
+    mgr.data["tasks"] = [{"type": "daily", "time": "09:00", "text": "查天气",
+                           "action": "remind", "fired": False, "last_fired": ""}]
+    assert rm.check_due_tasks(datetime.datetime(2026, 8, 6, 9, 0)) == 1
+    assert "查天气" in push.sent[0]
+    assert rm.check_due_tasks(datetime.datetime(2026, 8, 6, 9, 1)) == 0  # 同天不重复
+    assert rm.check_due_tasks(datetime.datetime(2026, 8, 7, 9, 0)) == 1  # 第二天再触发
+    assert len(push.sent) == 2
+
+
+def test_task_weekly_matches_weekday_only(tmp_path):
+    """每周五的任务只在周五触发。"""
+    push = FakePush()
+    rm, mgr = _make_rm(tmp_path, push=push)
+    mgr.data["tasks"] = [{"type": "weekly", "time": "17:00", "weekday": 4,
+                           "text": "写周报", "action": "remind",
+                           "fired": False, "last_fired": ""}]
+    # 周四 17:00 不触发
+    assert rm.check_due_tasks(datetime.datetime(2026, 8, 6, 17, 0)) == 0  # 周四
+    # 周五 17:00 触发
+    assert rm.check_due_tasks(datetime.datetime(2026, 8, 7, 17, 0)) == 1  # 周五
+    assert "写周报" in push.sent[0]
+    # 周五其他时间不触发
+    assert rm.check_due_tasks(datetime.datetime(2026, 8, 7, 18, 0)) == 0
+
+
+def test_task_once_fires_and_expires(tmp_path):
+    """一次性任务触发后标记 fired，不再重复。"""
+    push = FakePush()
+    rm, mgr = _make_rm(tmp_path, push=push)
+    mgr.data["tasks"] = [{"type": "once", "at": "2026-08-06 10:00",
+                           "text": "开会", "action": "remind",
+                           "fired": False, "last_fired": ""}]
+    assert rm.check_due_tasks(datetime.datetime(2026, 8, 6, 9, 59)) == 0  # 还没到
+    assert rm.check_due_tasks(datetime.datetime(2026, 8, 6, 10, 0)) == 1
+    assert "开会" in push.sent[0]
+    assert mgr.data["tasks"][0]["fired"] is True
+    assert rm.check_due_tasks(datetime.datetime(2026, 8, 6, 10, 1)) == 0  # 已触发
+
+
+def test_task_weather_action_pushes_weather(tmp_path):
+    """action=weather 且 weather_fn 有数据 → 推天气，不推提醒文本。"""
+    push = FakePush()
+    rm, mgr = _make_rm(tmp_path, push=push)
+    mgr.data["tasks"] = [{"type": "daily", "time": "09:00", "text": "查天气",
+                           "action": "weather", "fired": False, "last_fired": ""}]
+    rm._weather_fn = lambda: "深圳 当前 29 度（晴）"
+    assert rm.check_due_tasks(datetime.datetime(2026, 8, 6, 9, 0)) == 1
+    assert "深圳 当前 29 度" in push.sent[0]
+    assert "查天气" not in push.sent[0]
+
+
+def test_task_weather_action_fallback_to_text(tmp_path):
+    """action=weather 但天气查不到 → 退化为提醒文本。"""
+    push = FakePush()
+    rm, mgr = _make_rm(tmp_path, push=push)
+    mgr.data["tasks"] = [{"type": "daily", "time": "09:00", "text": "查天气",
+                           "action": "weather", "fired": False, "last_fired": ""}]
+    rm._weather_fn = lambda: None
+    assert rm.check_due_tasks(datetime.datetime(2026, 8, 6, 9, 0)) == 1
+    assert "查天气" in push.sent[0]
+
+
 # ---------- 定时提醒（上下班打卡） ----------
 
 def _cfg_with_clock(extra=None):

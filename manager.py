@@ -32,7 +32,7 @@ for _stream in (sys.stdout, sys.stderr):
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 MANAGER_PATH = os.path.join(DATA_DIR, "manager.json")
 
-EMPTY = {"todos": [], "memos": [], "timers": []}
+EMPTY = {"todos": [], "memos": [], "timers": [], "tasks": []}
 
 WEEKDAYS = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 
@@ -44,6 +44,20 @@ EXTRACT_TIMER = """你是定时提醒提取助手。今天日期：{date}（{wee
 - 时间换算成具体时间点：下午3点=15:00，3点=当天15:00（若已过则明天），
   20分钟后=当前+20分钟，明天9点=明天09:00，周五14:00=本周五14:00（若已过则下周）
 - 没说出明确时间就输出 at 为空字符串
+- 内容去掉语气词和称呼，简短
+对话：{text}"""
+
+# 通用定时任务提取提示词：把「每天早上9点查天气」转成结构化重复规则
+EXTRACT_TASK = """你是定时任务提取助手。今天日期：{date}（{weekday}），当前时间：{now}。
+用户会说带重复规律的任务（如「每天早上9点查天气推给我」「每周五下午5点提醒我写周报」「明天上午10点提醒我开会」）。
+只输出一个 JSON：
+{{"type": "daily" 或 "weekly" 或 "once", "time": "HH:MM 24小时制", "weekday": 0-6 或空(仅weekly用，0=周一), "at": "YYYY-MM-DD HH:MM 或空(仅once用)", "text": "要做什么，简短", "action": "remind" 或 "weather"}}
+规则：
+- 每天/天天/每天早上 → type=daily，time 是具体时刻（早上9点=09:00，下午5点=17:00）
+- 每周X/每周五 → type=weekly，weekday 换算（周一=0…周日=6），time 是具体时刻
+- 明天/后天/某月某日 → type=once，at 换算成具体日期时刻
+- 提到「查天气/天气推送」→ action=weather；否则 action=remind
+- 没说出明确时刻 → time 输出 09:00
 - 内容去掉语气词和称呼，简短
 对话：{text}"""
 
@@ -119,7 +133,11 @@ class LifeManager:
             return True, self._hint_todos()
         if t.startswith(("记一下", "帮我记", "记着")):
             return True, self._add_todo(t, deepseek)
-        # 取消定时提醒优先于备忘/待办删除（「忘掉3点的提醒」→ 提醒；「忘掉测试环境地址」→ 备忘）
+        # 取消通用定时任务优先（「取消每天早上9点的天气推送」→ 任务；「取消3点的提醒」→ 一次性提醒）
+        m = re.match(r"^(取消|删掉|删除|忘掉|关掉)\s*(.+)$", t)
+        if m and re.search(r"(每天|每周|每月|定时任务)", m.group(2)):
+            return True, self._del_task(m.group(2))
+        # 取消定时提醒（「忘掉3点的提醒」→ 提醒；「忘掉测试环境地址」→ 备忘）
         m = re.match(r"^(取消|删掉|删除|忘掉|关掉)\s*(.+?提醒.*)$", t)
         if m:
             return True, self._del_timer(m.group(2))
@@ -129,9 +147,16 @@ class LifeManager:
         m = re.match(r"^(完成了|办完了|搞定|做完了|取消)\s*(.+)$", t)
         if m:
             return True, self._done_todo(m.group(2))
+        # 查定时任务（「我有哪些定时任务」「定时任务列表」）
+        if re.search(r"(定时任务|周期任务|重复任务)", t) and re.search(r"(有哪些|列表|看看|什么|查)", t):
+            return True, self._hint_tasks()
         # 查定时提醒（「我有哪些提醒」「看看提醒」）
         if re.search(r"(有哪些|列表|看看|什么).{0,4}提醒|提醒.{0,4}(有哪些|列表|看看|什么)", t):
             return True, self._hint_timers()
+        # 通用定时任务（重复性，优先于一次性提醒）：每天/每周/每月
+        # 注意不能含「天天」：会误伤「今天天气」这类普通聊天
+        if re.search(r"(每天|每周|每月|定时任务)", t) and re.search(r"(提醒|推送|天气|任务)", t):
+            return True, self._add_task(t, deepseek)
         if re.search(r"(提醒我|提醒一下|定时提醒)", t):
             return True, self._add_timer(t, deepseek)
         return False, None
@@ -348,6 +373,136 @@ class LifeManager:
         print("[管家] 定时提醒：%s @ %s" % (text, at))
         return ("（内部消息：用户设置了定时提醒「%s」在%s。"
                 "简短确认一句，比如「好的，%s 提醒你」。）" % (text, at, hm))
+
+    # ---------- 通用定时任务（重复性：每天/每周/一次） ----------
+
+    def _add_task(self, t, ds):
+        """「每天早上9点查天气推给我」→ 模型提取规则存 tasks，到点由 reminder 执行。"""
+        now = datetime.datetime.now()
+        prompt = (EXTRACT_TASK.replace("{date}", now.strftime("%Y年%m月%d日"))
+                              .replace("{weekday}", WEEKDAYS[now.weekday()])
+                              .replace("{now}", now.strftime("%H:%M"))
+                              .replace("{text}", t))
+        try:
+            raw = ds.chat([{"role": "system", "content": "只输出 JSON。"},
+                           {"role": "user", "content": prompt}],
+                          temperature=0.2, max_tokens=200)
+        except Exception:
+            raw = ""
+        r = _parse_json(raw) or {}
+        task_type = str(r.get("type", "") or "").strip()
+        text = str(r.get("text", "") or "").strip()
+        if not text:
+            return ("（内部消息：用户说要设个定时任务，但你没听清要做什么。"
+                    "简短问他要做什么。）")
+        if task_type not in ("daily", "weekly", "once"):
+            return ("（内部消息：用户说「%s」要定时任务，但没提取出规律。"
+                    "简短告诉他要说清重复规律，比如「每天早上9点查天气」。）" % text)
+        task = {"type": task_type, "text": text,
+                "action": str(r.get("action") or "remind").strip() or "remind"}
+        if task_type == "daily":
+            task["time"] = str(r.get("time") or "09:00").strip()
+            if not re.match(r"^\d{2}:\d{2}$", task["time"]):
+                task["time"] = "09:00"
+        elif task_type == "weekly":
+            task["time"] = str(r.get("time") or "09:00").strip()
+            if not re.match(r"^\d{2}:\d{2}$", task["time"]):
+                task["time"] = "09:00"
+            try:
+                task["weekday"] = int(r.get("weekday") or 0) % 7
+            except (TypeError, ValueError):
+                task["weekday"] = 0
+        else:  # once
+            at = str(r.get("at") or "").strip()
+            if not re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", at):
+                return ("（内部消息：用户说「%s」要定时任务，但没给出具体日期时间。"
+                        "简短告诉他要说清时间，比如「明天上午10点提醒我开会」。）" % text)
+            task["at"] = at
+        task["fired"] = False       # once 用：触发后置 True
+        task["last_fired"] = ""    # daily/weekly 用：上次触发的日期
+        self.data["tasks"].append(task)
+        if len(self.data["tasks"]) > 30:   # 最多留 30 条
+            self.data["tasks"] = self.data["tasks"][-30:]
+        self.save()
+        print("[管家] 定时任务：%s" % json.dumps(task, ensure_ascii=False))
+        return ("（内部消息：用户设置了%s定时任务：%s。简短确认一句，"
+                "比如「好的，%s 会准时执行」。）"
+                % (self._task_desc(task), text, self._task_desc(task)))
+
+    def add_task_direct(self, task_type, text, time="", weekday=None, at="", action="remind"):
+        """直接存一条定时任务（Function Calling 工具用：参数由模型给出）。返回文本结果。"""
+        text = (text or "").strip()
+        if not text:
+            return "任务内容为空"
+        if task_type not in ("daily", "weekly", "once"):
+            return "任务类型需为 daily/weekly/once"
+        task = {"type": task_type, "text": text,
+                "action": (action or "remind").strip() or "remind",
+                "fired": False, "last_fired": ""}
+        if task_type == "daily":
+            task["time"] = time if re.match(r"^\d{2}:\d{2}$", time or "") else "09:00"
+        elif task_type == "weekly":
+            task["time"] = time if re.match(r"^\d{2}:\d{2}$", time or "") else "09:00"
+            try:
+                task["weekday"] = int(weekday) % 7
+            except (TypeError, ValueError):
+                task["weekday"] = 0
+        else:
+            if not re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", at or ""):
+                return "一次性任务需要具体时间，如 2026-08-20 10:00"
+            task["at"] = at
+        self.data["tasks"].append(task)
+        if len(self.data["tasks"]) > 30:
+            self.data["tasks"] = self.data["tasks"][-30:]
+        self.save()
+        print("[管家] 定时任务（工具）：%s" % json.dumps(task, ensure_ascii=False))
+        return "已设置%s：%s" % (self._task_desc(task), text)
+
+    def _task_desc(self, task):
+        """任务的人类可读描述（用于确认/列表）。"""
+        typ = task.get("type")
+        if typ == "daily":
+            return "每天 %s 的定时任务" % task.get("time")
+        if typ == "weekly":
+            # 周X：WEEKDAYS[idx] 如「星期五」→ 取末字「五」拼成「每周五」
+            short = "每周" + WEEKDAYS[int(task.get("weekday", 0))][-1:]
+            return "%s %s 的定时任务" % (short, task.get("time"))
+        return "%s 的一次性任务" % task.get("at")
+
+    def _hint_tasks(self):
+        """列出所有定时任务（含循环任务和未触发的一次性任务）。"""
+        active = [t for t in self.data["tasks"]
+                  if t.get("type") != "once" or not t.get("fired")]
+        if not active:
+            return ("（内部消息：用户查定时任务，目前一个都没有。"
+                    "简短告诉他现在没有定时任务。）")
+        items = []
+        for t in active:
+            action = "（推天气）" if t.get("action") == "weather" else ""
+            items.append("%s%s" % (self._task_desc(t), action))
+        return ("（内部消息：用户查定时任务，共%d条：%s。"
+                "简短像聊天一样列给他，不要用表格。）" % (len(active), "；".join(items)))
+
+    def _del_task(self, kw):
+        """「取消每天早上9点的天气推送」「删掉每周五的任务」→ 按内容/时间/规律匹配删除。"""
+        kw = kw.replace("定时任务", "").replace("任务", "")
+        kw = re.sub(r"(每天|每周|每月|早上|上午|下午|晚上|点|的|提醒|推送|天气|查|一下|给我)", "", kw)
+        kw = kw.strip("，。:：,; \t")
+        hits = [t for t in self.data["tasks"]
+                if not kw or kw in t["text"] or t["text"] in kw
+                or kw in self._task_desc(t)]  # 时间/规律描述也算（「9」→「每天 09:00 的定时任务」）
+        if len(hits) == 1:
+            self.data["tasks"].remove(hits[0])
+            self.save()
+            print("[管家] 取消任务：%s" % self._task_desc(hits[0]))
+            return ("（内部消息：用户取消了%s。简短确认一句。）"
+                    % self._task_desc(hits[0]))
+        if len(hits) > 1:
+            names = "；".join("%s（%s）" % (self._task_desc(t), t["text"]) for t in hits)
+            return ("（内部消息：用户要取消任务「%s」，但匹配到好几条：%s。"
+                    "简短问他要取消哪一条。）" % (kw or "全部", names))
+        return ("（内部消息：用户要取消任务「%s」，但你翻了翻没找到。"
+                "简短告诉他没找到，可以问「我有哪些定时任务」。）" % kw)
 
     def add_todo_direct(self, text, due=""):
         """直接存一条待办（工具用：text/due 由模型给出）。返回给模型的文本结果。"""

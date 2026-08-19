@@ -91,6 +91,7 @@ class XiaoQiBot:
         lines.append("记住XXX / 备忘录 / 忘掉XXX —— 备忘增查删（说错内容重说一遍即自动更新）")
         lines.append("记一下XXX（可说日期）/ 我有哪些待办 / 完成了XXX —— 待办")
         lines.append("X点提醒我XXX / 我有哪些提醒 / 取消X点的提醒 —— 定时提醒（到点微信推）")
+        lines.append("每天早上X点查天气 / 每周五X点提醒我写周报 —— 重复定时任务（可查可取消）")
         lines.append("今天天气 / 明天天气 / 这周天气 —— 天气查询（默认深圳）")
         lines.append("看新闻 / 周五的新闻 —— 科技/AI 新闻（每日自动存档可回看）")
         lines.append("记一笔XXX花多少 / 这个月花了多少 —— 记账汇总")

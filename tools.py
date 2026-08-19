@@ -95,6 +95,24 @@ def _timer_cancel(ctx, args):
     return ctx.mgr._del_timer(args.get("keyword", ""))
 
 
+def _task_add(ctx, args):
+    """定时任务（重复性）：每天/每周/一次。动作可指定天气推送。"""
+    return ctx.mgr.add_task_direct(
+        args.get("type", ""), args.get("text", ""),
+        time=args.get("time", ""),
+        weekday=args.get("weekday"),
+        at=args.get("at", ""),
+        action=args.get("action", "remind"))
+
+
+def _task_list(ctx, args):
+    return ctx.mgr._hint_tasks()
+
+
+def _task_cancel(ctx, args):
+    return ctx.mgr._del_task(args.get("keyword", ""))
+
+
 def _weather_query(ctx, args):
     from weather import fetch_weather, fetch_weather_day, fetch_weather_week
     city = (args.get("city") or "").strip() or ctx.cfg.get("weather_city") or "北京"
@@ -203,6 +221,16 @@ TOOLS = [
     _tool("timer_list", "列出所有未触发的定时提醒", {}, _timer_list),
     _tool("timer_cancel", "取消一条定时提醒（按关键词）",
           {"keyword": _p("string", "提醒内容或时间里的关键词", required=True)}, _timer_cancel),
+    _tool("task_add", "设置重复定时任务（用户说「每天早上X点做XX」「每周五X点提醒XX」时用）",
+          {"type": _p("string", "daily=每天 / weekly=每周 / once=一次性", required=True),
+           "text": _p("string", "任务内容，如 查天气 / 写周报", required=True),
+           "time": _p("string", "时刻 HH:MM，如 09:00（daily/weekly 用）"),
+           "weekday": _p("string", "周几 0-6，0=周一（weekly 用）"),
+           "at": _p("string", "具体时间 YYYY-MM-DD HH:MM（once 用）"),
+           "action": _p("string", "remind=推送提醒文本 / weather=推送天气数据，默认 remind")}, _task_add),
+    _tool("task_list", "列出所有定时任务（含重复任务）", {}, _task_list),
+    _tool("task_cancel", "取消一条定时任务（按内容关键词）",
+          {"keyword": _p("string", "任务内容关键词，如 查天气", required=True)}, _task_cancel),
     _tool("weather_query", "查询天气（今天/明天/未来几天）",
           {"city": _p("string", "城市名，如 深圳；不填用默认城市"),
            "when": _p("string", "今天/明天/这周，默认今天")}, _weather_query),
