@@ -472,7 +472,7 @@ class LifeManager:
         return "%s 的一次性任务" % task.get("at")
 
     def _hint_tasks(self):
-        """列出所有定时任务（含循环任务和未触发的一次性任务）。"""
+        """列出所有定时任务（含循环任务和未触发的一次性任务），带具体内容和动作。"""
         active = [t for t in self.data["tasks"]
                   if t.get("type") != "once" or not t.get("fired")]
         if not active:
@@ -480,8 +480,9 @@ class LifeManager:
                     "简短告诉他现在没有定时任务。）")
         items = []
         for t in active:
-            action = "（推天气）" if t.get("action") == "weather" else ""
-            items.append("%s%s" % (self._task_desc(t), action))
+            action = {"weather": "推天气", "music": "推单曲"}.get(t.get("action"), "提醒")
+            # 带上具体内容，否则模型只能看到时间看不到任务本身
+            items.append("%s：%s（%s）" % (self._task_desc(t), t.get("text") or "?", action))
         return ("（内部消息：用户查定时任务，共%d条：%s。"
                 "简短像聊天一样列给他，不要用表格。）" % (len(active), "；".join(items)))
 

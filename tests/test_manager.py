@@ -277,6 +277,8 @@ def test_task_hint_and_cancel(tmp_path):
     handled, hint = mgr.handle("我有哪些定时任务", None)
     assert handled is True
     assert "每天 09:00" in hint and "每周五 17:00" in hint
+    assert "查天气" in hint and "推天气" in hint   # 带具体内容和动作
+    assert "写周报" in hint
     # 取消「每天早上9点的天气推送」
     handled, hint = mgr.handle("取消每天早上9点的天气推送", None)
     assert handled is True
@@ -291,7 +293,7 @@ def test_task_hint_which_variant(tmp_path):
     for q in ["定时任务是哪些", "定时任务是什么", "我有什么定时任务", "定时任务列表"]:
         handled, hint = mgr.handle(q, None)
         assert handled is True, q
-        assert "每天 09:00" in hint, q
+        assert "每天 09:00" in hint and "查天气" in hint, q  # 带具体内容
 
 
 def test_task_del_not_found(tmp_path):
