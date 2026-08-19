@@ -284,6 +284,16 @@ def test_task_hint_and_cancel(tmp_path):
     assert mgr.data["tasks"][0]["text"] == "写周报"
 
 
+def test_task_hint_which_variant(tmp_path):
+    """「定时任务是哪些」「我有什么定时任务」也能查到。"""
+    mgr = _make_mgr(tmp_path)
+    mgr.add_task_direct("daily", "查天气", time="09:00")
+    for q in ["定时任务是哪些", "定时任务是什么", "我有什么定时任务", "定时任务列表"]:
+        handled, hint = mgr.handle(q, None)
+        assert handled is True, q
+        assert "每天 09:00" in hint, q
+
+
 def test_task_del_not_found(tmp_path):
     mgr = _make_mgr(tmp_path)
     mgr.add_task_direct("daily", "查天气", time="09:00")

@@ -147,8 +147,9 @@ class LifeManager:
         m = re.match(r"^(完成了|办完了|搞定|做完了|取消)\s*(.+)$", t)
         if m:
             return True, self._done_todo(m.group(2))
-        # 查定时任务（「我有哪些定时任务」「定时任务列表」）
-        if re.search(r"(定时任务|周期任务|重复任务)", t) and re.search(r"(有哪些|列表|看看|什么|查)", t):
+        # 查定时任务（「我有哪些定时任务」「定时任务是哪些」「定时任务列表」）
+        if re.search(r"(定时任务|周期任务|重复任务)", t) and re.search(
+                r"(有哪些|哪些|列表|看看|什么|查)", t):
             return True, self._hint_tasks()
         # 查定时提醒（「我有哪些提醒」「看看提醒」）
         if re.search(r"(有哪些|列表|看看|什么).{0,4}提醒|提醒.{0,4}(有哪些|列表|看看|什么)", t):
