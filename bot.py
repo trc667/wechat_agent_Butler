@@ -70,7 +70,8 @@ class XiaoQiBot:
         self.reminder = ReminderManager(self.mgr, cfg, push=reminder_push,
                                         weather_fn=self._weather_line,
                                         memory=self.mem, news_fn=self._news_line,
-                                        weather_alert_fn=self._weather_alert_line)
+                                        weather_alert_fn=self._weather_alert_line,
+                                        music_fn=self._music_line)
         if self.reminder.available():
             if reminder_push is not None:
                 print("[提醒] 微信主动提醒已启用：待办到期 + 每日晨报 + 定时打卡将直推微信")
@@ -172,6 +173,14 @@ class XiaoQiBot:
         if n:
             return True, n
         return False, None
+
+    def _music_line(self):
+        """定时任务推每日单曲（网易云热歌榜，失败返回 None 退化为提醒文本）。"""
+        try:
+            from music import fetch_daily_song
+            return fetch_daily_song()
+        except Exception:
+            return None
 
     def _weather_alert_line(self):
         """天气预警：今天有雨/雪/高温时返回提醒语，否则 None（供 07:30 定时推）。"""

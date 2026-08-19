@@ -51,12 +51,12 @@ EXTRACT_TIMER = """你是定时提醒提取助手。今天日期：{date}（{wee
 EXTRACT_TASK = """你是定时任务提取助手。今天日期：{date}（{weekday}），当前时间：{now}。
 用户会说带重复规律的任务（如「每天早上9点查天气推给我」「每周五下午5点提醒我写周报」「明天上午10点提醒我开会」）。
 只输出一个 JSON：
-{{"type": "daily" 或 "weekly" 或 "once", "time": "HH:MM 24小时制", "weekday": 0-6 或空(仅weekly用，0=周一), "at": "YYYY-MM-DD HH:MM 或空(仅once用)", "text": "要做什么，简短", "action": "remind" 或 "weather"}}
+{{"type": "daily" 或 "weekly" 或 "once", "time": "HH:MM 24小时制", "weekday": 0-6 或空(仅weekly用，0=周一), "at": "YYYY-MM-DD HH:MM 或空(仅once用)", "text": "要做什么，简短", "action": "remind" 或 "weather" 或 "music"}}
 规则：
 - 每天/天天/每天早上 → type=daily，time 是具体时刻（早上9点=09:00，下午5点=17:00）
 - 每周X/每周五 → type=weekly，weekday 换算（周一=0…周日=6），time 是具体时刻
 - 明天/后天/某月某日 → type=once，at 换算成具体日期时刻
-- 提到「查天气/天气推送」→ action=weather；否则 action=remind
+- 提到「查天气/天气推送」→ action=weather；提到「单曲/歌/音乐/推荐歌曲」→ action=music；否则 action=remind
 - 没说出明确时刻 → time 输出 09:00
 - 内容去掉语气词和称呼，简短
 对话：{text}"""
@@ -155,7 +155,8 @@ class LifeManager:
             return True, self._hint_timers()
         # 通用定时任务（重复性，优先于一次性提醒）：每天/每周/每月
         # 注意不能含「天天」：会误伤「今天天气」这类普通聊天
-        if re.search(r"(每天|每周|每月|定时任务)", t) and re.search(r"(提醒|推送|天气|任务)", t):
+        if re.search(r"(每天|每周|每月|定时任务)", t) and re.search(
+                r"(提醒|推送|天气|任务|单曲|歌|音乐)", t):
             return True, self._add_task(t, deepseek)
         if re.search(r"(提醒我|提醒一下|定时提醒)", t):
             return True, self._add_timer(t, deepseek)

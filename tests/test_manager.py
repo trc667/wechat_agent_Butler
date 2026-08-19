@@ -207,6 +207,18 @@ def test_task_daily_route_and_store(tmp_path):
     assert t["action"] == "weather"
 
 
+def test_task_daily_music_route_and_store(tmp_path):
+    """「每天早上7点半推每日单曲」→ daily 规则 + action=music。"""
+    mgr = _make_mgr(tmp_path)
+    ds = FakeDS(raw=json.dumps({"type": "daily", "time": "07:30",
+                                "text": "每日单曲", "action": "music"}))
+    handled, hint = mgr.handle("每天早上7点半推每日单曲给我", ds)
+    assert handled is True
+    t = mgr.data["tasks"][0]
+    assert t["type"] == "daily" and t["time"] == "07:30"
+    assert t["action"] == "music"
+
+
 def test_task_weekly_route_and_store(tmp_path):
     """「每周五下午5点提醒我写周报」→ weekly 规则，weekday=4。"""
     mgr = _make_mgr(tmp_path)

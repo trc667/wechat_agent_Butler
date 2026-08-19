@@ -227,7 +227,7 @@ TOOLS = [
            "time": _p("string", "时刻 HH:MM，如 09:00（daily/weekly 用）"),
            "weekday": _p("string", "周几 0-6，0=周一（weekly 用）"),
            "at": _p("string", "具体时间 YYYY-MM-DD HH:MM（once 用）"),
-           "action": _p("string", "remind=推送提醒文本 / weather=推送天气数据，默认 remind")}, _task_add),
+           "action": _p("string", "remind=推送提醒文本 / weather=推送天气 / music=推送每日单曲，默认 remind")}, _task_add),
     _tool("task_list", "列出所有定时任务（含重复任务）", {}, _task_list),
     _tool("task_cancel", "取消一条定时任务（按内容关键词）",
           {"keyword": _p("string", "任务内容关键词，如 查天气", required=True)}, _task_cancel),
