@@ -64,6 +64,8 @@ class XiaoQiBot:
         self._extract_lock = threading.Lock()
         self.mgr = LifeManager()          # 备忘录/待办（manager.py）
         self._pending_image = None        # 图片识别待确认：{kind, items, sender, ts}（防止误判自动入库）
+        # Function Calling 工具上下文（tools.py：模型可自主调用备忘/待办/天气等）
+        self._tool_ctx = None
         # 主动提醒：待办到期 + 每日晨报。微信直推（reminder_push）优先，企微兑底。
         self.reminder = ReminderManager(self.mgr, cfg, push=reminder_push,
                                         weather_fn=self._weather_line,
@@ -356,7 +358,17 @@ class XiaoQiBot:
             messages.append({"role": "system", "content": hint})
         messages += build_context(history, self.cfg.get("history_keep", 12))
         try:
-            reply = self.ds.chat(messages)
+            if handled:
+                # 快路径已处理（如备忘/待办），直接生成回复口吻
+                reply = self.ds.chat(messages)
+            else:
+                # Function Calling：模型可自主调用工具（备忘/待办/天气/新闻/记账等）
+                from tools import TOOLS_SCHEMA, dispatch, build_ctx
+                if self._tool_ctx is None:
+                    self._tool_ctx = build_ctx(self.mgr, self.cfg)
+                reply = self.ds.run_tool_loop(
+                    messages, TOOLS_SCHEMA,
+                    lambda n, a: dispatch(n, a, self._tool_ctx))
             if not reply:
                 raise DeepSeekError("模型返回空回复")
         except DeepSeekError as e:

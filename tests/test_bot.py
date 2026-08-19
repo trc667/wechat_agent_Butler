@@ -111,6 +111,37 @@ def test_news_query_not_triggered(monkeypatch):
     assert handled is False
 
 
+def test_reply_worker_uses_tools(monkeypatch, tmp_path):
+    """快路径未命中时走 Function Calling：模型调工具 → 数据真实落库。"""
+    import os
+    from bot import XiaoQiBot
+    from manager import LifeManager
+
+    class ToolFake:
+        """模拟支持工具的模型：主动调 todo_add 工具，然后回复文本。"""
+
+        def __init__(self):
+            self.tools_seen = None
+
+        def run_tool_loop(self, messages, tools, dispatcher, max_rounds=4, **kw):
+            self.tools_seen = tools
+            names = {t["function"]["name"] for t in tools}
+            assert "todo_add" in names and "weather_query" in names
+            # 模拟模型决定调工具
+            dispatcher("todo_add", {"text": "写周报", "due": "2026-08-21"})
+            return "已帮你记下写周报，周五前完成。"
+
+    sent = []
+    fake = ToolFake()
+    b = XiaoQiBot(fake, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: sent.append((s, t)))
+    b.mgr = LifeManager(os.path.join(str(tmp_path), "manager.json"))
+    b._tool_ctx = None
+    b._reply_worker("wxid", "帮我安排一下，写周报，截止周五")
+    assert sent and "写周报" in sent[0][1]
+    assert any(t["text"] == "写周报" for t in b.mgr.data["todos"])
+
+
 def test_image_worker_uses_context(monkeypatch):
     """识图 prompt 应带上最近对话/记忆/备忘录（与已有能力联动）。"""
     from bot import XiaoQiBot

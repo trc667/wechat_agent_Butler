@@ -138,6 +138,29 @@ class LifeManager:
 
     # ---------- 备忘录 ----------
 
+    def add_memo_direct(self, text):
+        """直接存一条备忘（Function Calling 工具用：参数由模型给出）。
+        返回给模型的文本结果。完全相同的去重，相似的更新。"""
+        text = (text or "").strip()
+        if not text:
+            return "备忘内容为空，请说明要记什么"
+        if any(m["text"] == text for m in self.data["memos"]):
+            return "这条备忘之前已经记过了：%s" % text
+        similar = [m for m in self.data["memos"]
+                   if len(text) >= 6 and len(m["text"]) >= 6
+                   and _ratio(m["text"], text) >= 0.6]
+        if similar:
+            old = similar[0]["text"]
+            similar[0]["text"] = text
+            similar[0]["ts"] = int(time.time())
+            self.save()
+            return "已把备忘录「%s」更新为「%s」" % (old, text)
+        self.data["memos"].append({"text": text, "ts": int(time.time())})
+        if len(self.data["memos"]) > 30:
+            self.data["memos"] = self.data["memos"][-30:]
+        self.save()
+        return "已存进备忘录：%s" % text
+
     def memo_prompt(self):
         """备忘录片段：永远拼在 system prompt 末尾，让管家查得到。"""
         memos = self.data["memos"]
@@ -243,6 +266,21 @@ class LifeManager:
 
     # ---------- 定时提醒 ----------
 
+    def add_timer_direct(self, at, text):
+        """直接存一条定时提醒（工具用：at/text 由模型给出）。返回给模型的文本结果。"""
+        at = (at or "").strip()
+        text = (text or "").strip()
+        if not text:
+            return "提醒内容为空"
+        if not re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", at):
+            return "时间格式不对，需要 YYYY-MM-DD HH:MM（如 2026-08-20 15:00）"
+        self.data["timers"].append({"at": at, "text": text, "fired": False})
+        self.data["timers"].sort(key=lambda x: x["at"])
+        if len(self.data["timers"]) > 20:
+            self.data["timers"] = self.data["timers"][-20:]
+        self.save()
+        return "已设置定时提醒：%s（%s）" % (text, at)
+
     def _hint_timers(self):
         """列未触发的定时提醒。"""
         pending = [t for t in self.data["timers"] if not t.get("fired")]
@@ -310,6 +348,19 @@ class LifeManager:
         print("[管家] 定时提醒：%s @ %s" % (text, at))
         return ("（内部消息：用户设置了定时提醒「%s」在%s。"
                 "简短确认一句，比如「好的，%s 提醒你」。）" % (text, at, hm))
+
+    def add_todo_direct(self, text, due=""):
+        """直接存一条待办（工具用：text/due 由模型给出）。返回给模型的文本结果。"""
+        text = (text or "").strip()
+        due = (due or "").strip()
+        if not text:
+            return "待办内容为空，请说明要记什么"
+        if due and not re.match(r"^\d{4}-\d{2}-\d{2}$", due):
+            due = ""
+        self.data["todos"].append({"text": text, "due": due, "done": False, "reminded": False})
+        self.save()
+        print("[管家] 记待办（工具）：%s%s" % (text, "，截止%s" % due if due else ""))
+        return "已记下待办：%s%s" % (text, "，截止%s" % due if due else "")
 
     def _add_todo(self, t, ds):
         now = datetime.datetime.now()
