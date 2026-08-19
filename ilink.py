@@ -13,6 +13,7 @@
 本模块只管"登录+收发"，AI 人设/记忆在 bot 层（XiaoQiBot）。
 """
 import base64
+import hashlib
 import json
 import os
 import random
@@ -23,6 +24,11 @@ from collections import deque
 import requests
 
 from media import download_image
+from media import HAVE_AES
+
+if HAVE_AES:
+    from Crypto.Cipher import AES
+    from Crypto.Util.Padding import pad
 
 BASE = "https://ilinkai.weixin.qq.com"
 CHANNEL_VERSION = "1.0.2"
@@ -343,6 +349,76 @@ class ILinkClient:
             self._post("/ilink/bot/sendtyping", payload, timeout=15)
         except Exception:
             pass
+
+    def send_image(self, to_user_id, image_bytes, caption="", timeout=30):
+        """发送图片消息（微信 CDN 上传链路，对齐腾讯官方 openclaw-weixin）。
+
+        流程：getUploadUrl 拿预签名地址 → AES-128-ECB 加密 → POST 上传 →
+        拿响应头 x-encrypted-param → sendmessage 带 image_item。
+        caption 非空时先发一条文本。失败返回 False。
+        """
+        token = self._context_tokens.get(to_user_id)
+        if not token:
+            print("[警告] 没有 %s 的会话令牌，图片发不出去（等对方再发一条就好）" % to_user_id)
+            return False
+        if not HAVE_AES:
+            print("[错误] 未安装 pycryptodome，无法发送图片")
+            return False
+        try:
+            rawsize = len(image_bytes)
+            rawfilemd5 = hashlib.md5(image_bytes).hexdigest()
+            # PKCS7 填充后的密文大小
+            filesize = rawsize + (16 - rawsize % 16) if rawsize % 16 else rawsize
+            filekey = os.urandom(16).hex()
+            aeskey = os.urandom(16)
+            # 1) 拿预签名上传地址
+            up = self._post("/ilink/bot/getuploadurl", {
+                "filekey": filekey, "media_type": 1, "to_user_id": to_user_id,
+                "rawsize": rawsize, "rawfilemd5": rawfilemd5, "filesize": filesize,
+                "no_need_thumb": True, "aeskey": aeskey.hex(),
+            }, timeout=timeout)
+            upload_full_url = (up.get("upload_full_url") or "").strip()
+            if not upload_full_url:
+                print("[错误] getUploadUrl 没返回上传地址: %s" % up)
+                return False
+            # 2) AES-128-ECB 加密 + 上传
+            cipher = AES.new(aeskey, AES.MODE_ECB)
+            ciphertext = cipher.encrypt(pad(image_bytes, AES.block_size))
+            r = requests.post(upload_full_url, data=ciphertext,
+                              headers={"Content-Type": "application/octet-stream"},
+                              timeout=timeout, proxies=NO_PROXY)
+            download_param = r.headers.get("x-encrypted-param") or ""
+            if r.status_code != 200 or not download_param:
+                print("[错误] CDN 上传失败 HTTP %d, x-encrypted-param=%r"
+                      % (r.status_code, download_param[:20]))
+                return False
+            # 3) 先发文本（如有），再发图片
+            if caption:
+                self.send_text(to_user_id, caption, timeout=timeout)
+            client_id = "xiaoqi-" + base64.b64encode(
+                str(random.getrandbits(64)).encode("utf-8")).decode("ascii").rstrip("=")
+            item = {"type": 2, "image_item": {
+                "media": {"encrypt_query_param": download_param,
+                           "aes_key": base64.b64encode(aeskey).decode("ascii"),
+                           "encrypt_type": 1},
+                "mid_size": filesize}}
+            payload = {
+                "msg": {
+                    "from_user_id": "", "to_user_id": to_user_id,
+                    "client_id": client_id, "message_type": 2, "message_state": 2,
+                    "context_token": token,
+                    "item_list": [item],
+                },
+                "base_info": {"channel_version": CHANNEL_VERSION},
+            }
+            data = self._post("/ilink/bot/sendmessage", payload, timeout=timeout)
+            if data.get("ret", 0) != 0:
+                print("[错误] 发送图片消息失败: %s" % data)
+                return False
+            return True
+        except Exception as e:
+            print("[错误] 发送图片异常: %s" % e)
+            return False
 
     def send_text(self, to_user_id, text, timeout=30):
         """回复用户一条文字消息（用最近一次收到的 context_token 关联会话）。"""

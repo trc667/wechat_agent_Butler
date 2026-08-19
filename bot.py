@@ -53,11 +53,12 @@ class FakeDeepSeek:
 
 
 class XiaoQiBot:
-    def __init__(self, deepseek, memory, cfg, send, reminder_push=None):
+    def __init__(self, deepseek, memory, cfg, send, reminder_push=None, send_image=None):
         self.ds = deepseek
         self.mem = memory
         self.cfg = cfg
         self._send = send          # send(sender_wxid, text)，真实环境是 wcf.send_text
+        self._send_image = send_image  # send_image(user, bytes, caption)（可选，立即推单曲封面用）
         self._last_reply_ts = 0.0  # 上次发消息时间，用于频率限制
         self._user_msgs_since_extract = 0
         self._last_sender = None   # 最近私聊过的人（定时问候发给 ta）
@@ -129,18 +130,26 @@ class XiaoQiBot:
         except Exception:
             return None
 
-    def _try_music_now(self, text):
+    def _try_music_now(self, sender, text):
         """立即推一首每日单曲：说「现在推一首单曲/来首歌」→ 抓网易云热歌榜直接发。
+        有专辑封面且支持发图时先发封面图再发链接文本（观感接近卡片）。
         返回 (True, 回复文本) 表示命中；否则 (False, None)。"""
         # 意图词开头（推/来/放/推荐/点）+ 目标词（单曲/首歌），避免误伤「这首歌很好听」
         if not re.search(r"(推|来|放|推荐|点)[^，。！？]{0,4}(每日单曲|单曲|首歌)",
                          text or ""):
             return False, None
-        from music import fetch_daily_song
-        s = fetch_daily_song()
-        if not s:
+        from music import fetch_daily_song_full
+        m = fetch_daily_song_full()
+        if not m or not m.get("text"):
             return True, "网易云暂时没连上，稍后再试试"
-        return True, s
+        # 有封面且支持发图：先发图（封面观感）再发链接文本
+        if m.get("image") and self._send_image is not None:
+            try:
+                self._send_image(sender, m["image"], caption=m["text"])
+                return True, m["text"]
+            except Exception:
+                pass  # 发图失败退回纯文本
+        return True, m["text"]
 
     def _news_line(self):
         """晨报附加科技/AI 新闻（抓失败返回 None，晨报照常发），并自动存档可回看。"""
@@ -188,10 +197,10 @@ class XiaoQiBot:
         return False, None
 
     def _music_line(self):
-        """定时任务推每日单曲（网易云热歌榜，失败返回 None 退化为提醒文本）。"""
+        """定时任务推每日单曲（网易云热歌榜 + 专辑封面）。失败返回 None 退化为提醒文本。"""
         try:
-            from music import fetch_daily_song
-            return fetch_daily_song()
+            from music import fetch_daily_song_full
+            return fetch_daily_song_full()
         except Exception:
             return None
 
@@ -393,7 +402,7 @@ class XiaoQiBot:
             return
         handled, hint = self.mgr.handle(text, self.ds)
         if not handled:  # 不是管家命令，试试立即推一首单曲
-            handled, hint = self._try_music_now(text)
+            handled, hint = self._try_music_now(sender, text)
             if handled:
                 self._send(sender, hint)
                 self.mem.append_history("assistant", hint)

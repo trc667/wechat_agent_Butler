@@ -53,16 +53,21 @@ def main():
         print("[%s] 小管家：%s（想了 %.0f 秒）" % (time.strftime("%H:%M:%S"), text, cost))
         client.send_text(sender, text)
 
-    def push_ilink(text):
+    def push_ilink(text, image=None):
         """主动提醒：遍历所有聊过的用户（有 context_token 的）直推微信。
-        实测确认 iLink 支持用最近 context_token 主动发消息。"""
+        实测确认 iLink 支持用最近 context_token 主动发消息。
+        image 为 bytes 时发「图片 + 文本」；否则只发文本。"""
         ok = False
         for user in list(client._context_tokens.keys()):
-            if client.send_text(user, text):
+            if image:
+                if client.send_image(user, image, caption=text):
+                    ok = True
+            elif client.send_text(user, text):
                 ok = True
         return ok
 
-    bot = XiaoQiBot(deepseek, mem, cfg, send=send_and_log, reminder_push=push_ilink)
+    bot = XiaoQiBot(deepseek, mem, cfg, send=send_and_log,
+                    reminder_push=push_ilink, send_image=client.send_image)
 
     print("=" * 46)
     print("  小管家已上线（微信 ClawBot 官方通道）")

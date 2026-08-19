@@ -123,12 +123,13 @@ class ReminderManager:
             return False
         return _wecom_client(self.cfg) is not None
 
-    def _send(self, text):
-        """推一条消息（统一去 emoji/波浪号）；失败打日志不抛异常。"""
+    def _send(self, text, image=None):
+        """推一条消息（统一去 emoji/波浪号）；失败打日志不抛异常。
+        image 为 bytes 时由 push 函数决定是否发图（微信直推支持，企微忽略）。"""
         try:
             text = strip_emoji(text)
             if self._push_fn is not None:
-                return self._push_fn(text)
+                return self._push_fn(text, image=image)
             if self._client is None:
                 self._client = _wecom_client(self.cfg)
             if self._client is None:
@@ -376,11 +377,11 @@ class ReminderManager:
                     continue
             if action == "music" and self._music_fn is not None:
                 try:
-                    s = self._music_fn()
+                    m = self._music_fn()
                 except Exception:
-                    s = None
-                if s:
-                    self._send(s)
+                    m = None
+                if m and m.get("text"):
+                    self._send(m["text"], image=m.get("image"))
                     continue
             text = tk.get("text") or "定时任务"
             self._send("小管家提醒：%s 时间到" % text)
@@ -556,7 +557,7 @@ if __name__ == "__main__":
         def __init__(self):
             self.sent = []
 
-        def __call__(self, text):
+        def __call__(self, text, image=None):
             self.sent.append(text)
             return True
 

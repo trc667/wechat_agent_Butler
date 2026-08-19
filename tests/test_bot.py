@@ -83,8 +83,9 @@ def test_music_now_reply(monkeypatch):
 
     sent = []
     monkeypatch.setattr(
-        "music.fetch_daily_song",
-        lambda: "今日单曲：失眠 - Suki刘舒妤\nhttps://music.163.com/song?id=273114")
+        "music.fetch_daily_song_full",
+        lambda: {"text": "今日单曲：失眠 - Suki刘舒妤\nhttps://music.163.com/song?id=273114",
+                 "image": None})
     b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
                   send=lambda s, t: sent.append((s, t)))
     b._reply_worker("wxid", "现在给我推送一首每日单曲")
@@ -92,14 +93,33 @@ def test_music_now_reply(monkeypatch):
     assert "失眠" in sent[0][1] and "music.163.com" in sent[0][1]
 
 
+def test_music_now_sends_cover_image(monkeypatch):
+    """有专辑封面且支持发图 → 先发封面图再发链接文本。"""
+    from bot import XiaoQiBot
+
+    images = []
+    sent = []
+    monkeypatch.setattr(
+        "music.fetch_daily_song_full",
+        lambda: {"text": "今日单曲：失眠 - Suki刘舒妤\nhttps://music.163.com/song?id=273114",
+                 "image": b"cover-bytes"})
+    b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: sent.append((s, t)),
+                  send_image=lambda s, img, caption=None: images.append((s, img)))
+    b._reply_worker("wxid", "来首歌")
+    assert images == [("wxid", b"cover-bytes")]  # 封面已发
+    assert len(sent) == 1 and "失眠" in sent[0][1]  # 链接文本也发了
+
+
 def test_music_now_trigger_words(monkeypatch):
     from bot import XiaoQiBot
 
     b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
                   send=lambda s, t: None)
-    monkeypatch.setattr("music.fetch_daily_song", lambda: "今日单曲：x")
+    monkeypatch.setattr("music.fetch_daily_song_full",
+                        lambda: {"text": "今日单曲：x", "image": None})
     for q in ["推一首单曲", "来首歌", "放首每日单曲", "推荐首歌", "现在给我推一首歌"]:
-        handled, _ = b._try_music_now(q)
+        handled, _ = b._try_music_now("wxid", q)
         assert handled is True, q
 
 
@@ -109,9 +129,10 @@ def test_music_now_not_triggered_by_comment(monkeypatch):
 
     b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
                   send=lambda s, t: None)
-    monkeypatch.setattr("music.fetch_daily_song", lambda: "今日单曲：x")
+    monkeypatch.setattr("music.fetch_daily_song_full",
+                        lambda: {"text": "今日单曲：x", "image": None})
     for q in ["这首歌很好听", "我喜欢这首歌", "你好呀"]:
-        handled, _ = b._try_music_now(q)
+        handled, _ = b._try_music_now("wxid", q)
         assert handled is False, q
 
 
@@ -120,8 +141,8 @@ def test_music_now_failure_gives_hint(monkeypatch):
 
     b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
                   send=lambda s, t: None)
-    monkeypatch.setattr("music.fetch_daily_song", lambda: None)
-    handled, hint = b._try_music_now("推一首单曲")
+    monkeypatch.setattr("music.fetch_daily_song_full", lambda: None)
+    handled, hint = b._try_music_now("wxid", "推一首单曲")
     assert handled is True
     assert "没连上" in hint
 

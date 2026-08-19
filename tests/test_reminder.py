@@ -10,9 +10,12 @@ from manager import LifeManager
 class FakePush:
     def __init__(self):
         self.sent = []
+        self.images = []
 
-    def __call__(self, text):
+    def __call__(self, text, image=None):
         self.sent.append(text)
+        if image:
+            self.images.append(image)
         return True
 
 
@@ -275,14 +278,17 @@ def test_task_weather_action_fallback_to_text(tmp_path):
 
 
 def test_task_music_action_pushes_song(tmp_path):
-    """action=music 且 music_fn 有数据 → 推单曲，不推提醒文本。"""
+    """action=music 且 music_fn 有数据 → 推单曲（含封面图），不推提醒文本。"""
     push = FakePush()
     rm, mgr = _make_rm(tmp_path, push=push)
     mgr.data["tasks"] = [{"type": "daily", "time": "07:30", "text": "每日单曲",
                            "action": "music", "fired": False, "last_fired": ""}]
-    rm._music_fn = lambda: "今日单曲：海屿你 - 马也_Crabbit\nhttps://music.163.com/song?id=1"
+    rm._music_fn = lambda: {
+        "text": "今日单曲：海屿你 - 马也_Crabbit\nhttps://music.163.com/song?id=1",
+        "image": b"cover-bytes"}
     assert rm.check_due_tasks(datetime.datetime(2026, 8, 6, 7, 30)) == 1
     assert "海屿你" in push.sent[0] and "music.163.com" in push.sent[0]
+    assert push.images == [b"cover-bytes"]  # 封面图随消息传出
     assert "每日单曲" not in push.sent[0]  # 不是提醒文本
 
 

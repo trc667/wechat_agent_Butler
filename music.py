@@ -25,7 +25,7 @@ _OFFSET_DAYS = 10
 
 
 def parse_song(data, index=0):
-    """从网易云歌单 detail 接口 JSON 里取第 index 首歌，返回文本；失败返回 None。
+    """从网易云歌单 detail 接口 JSON 里取第 index 首歌，返回 (text, cover_url)；失败返回 None。
     纯函数，便于测试。"""
     try:
         tracks = data["result"]["tracks"]
@@ -37,23 +37,45 @@ def parse_song(data, index=0):
         name = t.get("name", "")
         artists = "、".join(a.get("name", "") for a in t.get("artists") or [])
         song_id = t.get("id")
+        album = t.get("album") or {}
+        cover_url = album.get("picUrl") or album.get("picUrl500") or ""
     except (KeyError, IndexError, TypeError):
         return None
     if not name or not song_id:
         return None
     line = "%s - %s" % (name, artists) if artists else name
-    return "今日单曲：%s\nhttps://music.163.com/song?id=%s" % (line, song_id)
+    text = "今日单曲：%s\nhttps://music.163.com/song?id=%s" % (line, song_id)
+    return text, cover_url
 
 
 def fetch_daily_song(timeout=8):
     """抓网易云热歌榜，按日期轮换取一首。返回单曲文本；全部失败返回 None。"""
+    full = fetch_daily_song_full(timeout=timeout)
+    return full["text"] if full else None
+
+
+def fetch_daily_song_full(timeout=8):
+    """抓网易云热歌榜，返回 {"text": 单曲文本, "image": 封面图 bytes 或 None}；失败返回 None。"""
     try:
         r = requests.get("https://music.163.com/api/playlist/detail?id=%d"
                          % HOT_PLAYLIST_ID, timeout=timeout,
                          proxies=_NO_PROXY, headers=_HEADERS)
         r.raise_for_status()
         index = datetime.date.today().toordinal() % _OFFSET_DAYS
-        return parse_song(r.json(), index)
+        parsed = parse_song(r.json(), index)
+        if not parsed:
+            return None
+        text, cover_url = parsed
+        image = None
+        if cover_url:
+            try:
+                cr = requests.get(cover_url, timeout=timeout,
+                                  proxies=_NO_PROXY, headers=_HEADERS)
+                cr.raise_for_status()
+                image = cr.content
+            except Exception:
+                image = None  # 封面下载失败不影响文本推送
+        return {"text": text, "image": image}
     except Exception:
         return None
 

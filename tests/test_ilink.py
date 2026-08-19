@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+import ilink
 from ilink import ILinkClient, ILinkError
 
 
@@ -72,3 +73,70 @@ def test_ret_minus14_raises_session_expired(tmp_path):
     c = _make_client(tmp_path, Fake14())
     with pytest.raises(ILinkError, match="SESSION_EXPIRED"):
         c.get_updates()
+
+
+# ---------- 发送图片（CDN 上传链路） ----------
+
+def test_send_image_success(monkeypatch, tmp_path):
+    """完整链路：getUploadUrl → AES 上传 → sendmessage 图片 item，成功返回 True。"""
+    c = _make_client(tmp_path)
+    c._context_tokens["u1"] = "t1"
+    calls = []
+
+    def fake_post(path, payload, timeout=60):
+        calls.append(path)
+        if path == "/ilink/bot/getuploadurl":
+            assert payload["media_type"] == 1 and payload["no_need_thumb"] is True
+            assert payload["aeskey"]
+            return {"upload_full_url": "https://cdn/upload"}
+        if path == "/ilink/bot/getconfig":
+            return {"ret": 0, "typing_ticket": "ticket"}
+        if path == "/ilink/bot/sendtyping":
+            return {"ret": 0}
+        if path == "/ilink/bot/sendmessage":
+            item = payload["msg"]["item_list"][0]
+            media = item.get("image_item") or {}
+            if item["type"] == 2:  # 图片消息
+                assert media["media"]["encrypt_query_param"] == "download-param"
+                assert media["media"]["aes_key"]  # base64
+                assert media["media"]["encrypt_type"] == 1
+            return {"ret": 0}
+        return {}
+
+    c._post = fake_post
+
+    class FakeUploadResp:
+        status_code = 200
+        headers = {"x-encrypted-param": "download-param"}
+
+    monkeypatch.setattr(ilink.requests, "post", lambda *a, **k: FakeUploadResp())
+    ok = c.send_image("u1", b"fake-image-bytes" * 4, caption="今日单曲：测试")
+    assert ok is True
+    # 链路：先取上传地址，之后至少一次发送（caption 文本 + 图片各一条 sendmessage）
+    assert calls[0] == "/ilink/bot/getuploadurl"
+    assert calls.count("/ilink/bot/sendmessage") >= 2
+
+
+def test_send_image_no_token(tmp_path):
+    c = _make_client(tmp_path)
+    assert c.send_image("u1", b"x" * 32) is False  # 没有会话令牌发不出去
+
+
+def test_send_image_upload_failure(monkeypatch, tmp_path):
+    """CDN 上传响应缺 x-encrypted-param → 失败。"""
+    c = _make_client(tmp_path)
+    c._context_tokens["u1"] = "t1"
+
+    def fake_post(path, payload, timeout=60):
+        if path == "/ilink/bot/getuploadurl":
+            return {"upload_full_url": "https://cdn/upload"}
+        return {}
+
+    c._post = fake_post
+
+    class BadResp:
+        status_code = 200
+        headers = {}
+
+    monkeypatch.setattr(ilink.requests, "post", lambda *a, **k: BadResp())
+    assert c.send_image("u1", b"x" * 32) is False
