@@ -367,8 +367,8 @@ class ILinkClient:
         try:
             rawsize = len(image_bytes)
             rawfilemd5 = hashlib.md5(image_bytes).hexdigest()
-            # PKCS7 填充后的密文大小
-            filesize = rawsize + (16 - rawsize % 16) if rawsize % 16 else rawsize
+            # PKCS7 填充后的密文大小（官方 aesEcbPaddedSize：ceil((n+1)/16)*16，满块也补 16）
+            filesize = ((rawsize + 1 + 15) // 16) * 16
             filekey = os.urandom(16).hex()
             aeskey = os.urandom(16)
             # 1) 拿预签名上传地址
@@ -399,7 +399,10 @@ class ILinkClient:
                 str(random.getrandbits(64)).encode("utf-8")).decode("ascii").rstrip("=")
             item = {"type": 2, "image_item": {
                 "media": {"encrypt_query_param": download_param,
-                           "aes_key": base64.b64encode(aeskey).decode("ascii"),
+                           # 官方 send.ts：aes_key = base64(aeskey 的 hex 字符串，32 字符)（44 字符）
+                           # 直接 base64(16 字节原始 key)（24 字符）微信客户端按 hex 解析会解密失败→图片显示已过期
+                           "aes_key": base64.b64encode(
+                               aeskey.hex().encode("ascii")).decode("ascii"),
                            "encrypt_type": 1},
                 "mid_size": filesize}}
             payload = {

@@ -98,7 +98,10 @@ def test_send_image_success(monkeypatch, tmp_path):
             media = item.get("image_item") or {}
             if item["type"] == 2:  # 图片消息
                 assert media["media"]["encrypt_query_param"] == "download-param"
-                assert media["media"]["aes_key"]  # base64
+                # aes_key 必须是 base64(hex 字符串)（44 字符），否则微信客户端解密失败显示图片已过期
+                aes = media["media"]["aes_key"]
+                assert len(aes) == 44
+                assert len(ilink.base64.b64decode(aes).decode("ascii")) == 32
                 assert media["media"]["encrypt_type"] == 1
             return {"ret": 0}
         return {}
