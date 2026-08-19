@@ -1,3 +1,4 @@
 requests>=2.28.0
 pycryptodome>=3.19.0
 Pillow>=7.0.0
+zhdate>=0.1

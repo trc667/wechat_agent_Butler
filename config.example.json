@@ -25,6 +25,10 @@
       {"time": "18:00", "text": "下班时间到，记得打卡"}
     ]
   },
+  "daily_summary": {
+    "enabled": true,
+    "time": "22:00"
+  },
   "wecom": {
     "corpid": "",
     "agentid": "",

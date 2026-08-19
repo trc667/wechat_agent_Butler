@@ -40,6 +40,10 @@ DEFAULTS = {
             {"time": "18:00", "text": "下班时间到，记得打卡"},
         ],
     },
+    "daily_summary": {      # 每日睡前总结：推今天完成了什么/记了什么/花了多少
+        "enabled": True,
+        "time": "22:00",
+    },
     "wecom": {
         "corpid": "",            # 企业ID（管理后台 -> 我的企业）
         "agentid": "",           # 自建应用ID
@@ -88,8 +92,8 @@ def load_config(force=False):
                 cfg[k] = v
     except (FileNotFoundError, json.JSONDecodeError):
         pass  # 缺文件或损坏就全用默认值
-    # daily_greeting / clock_reminders / wecom 允许部分填写（深合并，先复制一份避免污染 DEFAULTS）
-    for section in ("daily_greeting", "clock_reminders", "wecom"):
+    # daily_greeting / clock_reminders / daily_summary / wecom 允许部分填写（深合并，先复制一份避免污染 DEFAULTS）
+    for section in ("daily_greeting", "clock_reminders", "daily_summary", "wecom"):
         merged = dict(DEFAULTS[section])
         if isinstance(cfg.get(section), dict):
             merged.update(cfg[section])

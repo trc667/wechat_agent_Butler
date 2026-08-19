@@ -108,6 +108,9 @@ class ReminderManager:
         self._season_last_day = None  # 节气推送防重复（每天最多一次）
         self._alert_last_day = None   # 天气预警防重复（每天最多一次）
         self._alert_time = str(cfg.get("weather_alert_time") or "07:30")
+        self._summary_last_day = None  # 睡前总结防重复（每天最多一次）
+        self._summary_time = str((cfg.get("daily_summary") or {}).get("time", "22:00"))
+        self._cleanup_last_day = None  # 过期数据清理（每天最多一次）
 
     # ---------- 可用性 ----------
 
@@ -233,6 +236,10 @@ class ReminderManager:
         tomorrow_note = self._day_note(now, 1)
         if tomorrow_note:
             lines.append(tomorrow_note)
+        # 节日/节气倒计时（未来 90 天内的最近一个）
+        countdown = self._next_festival(now)
+        if countdown:
+            lines.append("距离%s还有 %d 天" % (countdown[0], countdown[2]))
         # 备忘录只报条数，不塞原文（避免敏感凭据/超长内容每天推送到微信）
         n = len(self.mgr.data["memos"])
         if n:
@@ -369,6 +376,116 @@ class ReminderManager:
             self._send("小管家提醒：%s 时间到" % text)
         return len(due_now)
 
+    # ---------- 节日倒计时（公历 + 节气 + 农历） ----------
+
+    def _next_lunar_festival(self, now):
+        """未来最近的一个农历节日（春节/元宵/端午/七夕/中秋/重阳/腊八），
+        返回 (名称, 公历日期) 或 None。用 zhdate 库（纯 Python 无依赖）。"""
+        fests = {"1-1": "春节", "1-15": "元宵节", "5-5": "端午节",
+                 "7-7": "七夕", "8-15": "中秋节", "9-9": "重阳节",
+                 "12-8": "腊八节"}
+        try:
+            from zhdate import ZhDate
+        except ImportError:
+            return None  # 没装 zhdate 就跳过农历倒计时
+        for i in range(1, 370):
+            d = now.date() + datetime.timedelta(days=i)
+            try:
+                lunar = ZhDate.from_datetime(
+                    datetime.datetime(d.year, d.month, d.day))
+            except Exception:
+                continue
+            if getattr(lunar, "leap_month", False):
+                continue  # 闰月不算节日
+            key = "%d-%d" % (lunar.lunar_month, lunar.lunar_day)
+            if key in fests:
+                return fests[key], d
+        return None
+
+    def _next_festival(self, now):
+        """未来 90 天内最近的节日/节气（公历节日 + 24 节气 + 农历节日），
+        返回 (名称, 公历日期, 天数差) 或 None。"""
+        today = now.date()
+        candidates = []
+        # 公历节日 + 节气：今年和明年
+        for mmdd, name in (list(FIXED_HOLIDAYS.items())
+                           + [(k, v[0]) for k, v in SOLAR_TERMS.items()]):
+            for year in (today.year, today.year + 1):
+                d = datetime.date(year, int(mmdd[:2]), int(mmdd[3:]))
+                delta = (d - today).days
+                if 0 < delta <= 90:
+                    candidates.append((delta, name, d))
+        # 农历节日
+        lf = self._next_lunar_festival(now)
+        if lf:
+            delta = (lf[1] - today).days
+            if 0 < delta <= 90:
+                candidates.append((delta, lf[0], lf[1]))
+        if not candidates:
+            return None
+        delta, name, d = min(candidates, key=lambda x: x[0])
+        return name, d, delta
+
+    # ---------- 每日睡前总结（今天完成了什么/记了什么/花了多少） ----------
+
+    def build_summary(self, now=None):
+        """组装睡前总结文本：今日完成待办 + 新增备忘 + 支出。全部为空也给一句收尾。"""
+        now = now or datetime.datetime.now()
+        today = now.strftime("%Y-%m-%d")
+        lines = []
+        # 今日完成的待办（需要完成时间戳；旧数据没有就不统计）
+        done_today = [t for t in self.mgr.data["todos"]
+                      if t.get("done") and (t.get("done_ts") or "").startswith(today)]
+        if done_today:
+            lines.append("今天完成了 %d 件事：%s" % (
+                len(done_today), "、".join(t["text"] for t in done_today)))
+        # 今日新增的备忘（ts 是时间戳）
+        memos_today = [m for m in self.mgr.data["memos"]
+                       if str(m.get("ts") or "").isdigit()
+                       and datetime.datetime.fromtimestamp(int(m["ts"])).strftime("%Y-%m-%d") == today]
+        if memos_today:
+            lines.append("记了 %d 条备忘，需要时问我要" % len(memos_today))
+        # 今日支出（expenses.json）
+        try:
+            from tools import _load_expenses
+            spent = [it for it in _load_expenses().get("items", [])
+                     if (it.get("date") or "") == today]
+            if spent:
+                total = sum(float(it.get("amount", 0)) for it in spent)
+                by_cat = {}
+                for it in spent:
+                    c = it.get("category") or "其他"
+                    by_cat[c] = by_cat.get(c, 0) + float(it.get("amount", 0))
+                parts = "、".join("%s %s" % (c, format(v, ".0f")) for c, v in by_cat.items())
+                lines.append("今天花了 %s 元（%s）" % (format(total, ".0f"), parts))
+        except Exception:
+            pass
+        if not lines:
+            return "今天没有留下记录，早点休息，明天继续加油。"
+        return strip_emoji("\n".join(lines))
+
+    def maybe_send_summary(self, now=None):
+        """到点（默认 22:00）推睡前总结，每天最多一次。返回是否发送。"""
+        now = now or datetime.datetime.now()
+        if now.strftime("%H:%M") != self._summary_time:
+            return False
+        if self._summary_last_day == now.date():
+            return False
+        text = self.build_summary(now)
+        self._summary_last_day = now.date()  # 失败也标记，防刷屏
+        return self._send(text)
+
+    def maybe_cleanup(self, now=None):
+        """每天清理一次过期数据（once 任务/已完成待办/已触发提醒）。"""
+        now = now or datetime.datetime.now()
+        if self._cleanup_last_day == now.date():
+            return
+        self._cleanup_last_day = now.date()
+        try:
+            self.mgr.cleanup_old_data(now)
+        except Exception as e:
+            print("[提醒] 数据清理异常: %s" % e)
+
     def maybe_send_digest(self, now=None):
         """每天到点发一次晨报（当天不重复，可附天气）。返回是否发送。"""
         now = now or datetime.datetime.now()
@@ -409,6 +526,8 @@ class ReminderManager:
                 self.maybe_send_season_note()
                 self.maybe_send_weather_alert()
                 self.maybe_send_digest()
+                self.maybe_send_summary()
+                self.maybe_cleanup()
             except Exception as e:
                 print("[提醒] 循环异常: %s" % e)
             time.sleep(self.interval)

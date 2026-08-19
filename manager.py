@@ -517,6 +517,47 @@ class LifeManager:
         print("[管家] 记待办（工具）：%s%s" % (text, "，截止%s" % due if due else ""))
         return "已记下待办：%s%s" % (text, "，截止%s" % due if due else "")
 
+    # ---------- 过期数据自动清理 ----------
+
+    def cleanup_old_data(self, now=None):
+        """清理过期数据：已触发的 once 任务/定时提醒（超 3 天）、完成超 7 天的待办。
+        返回清理条数。备忘录不自动删（用户可能长期需要）。"""
+        now = now or datetime.datetime.now()
+        removed = 0
+        # 1) 已触发的 once 任务（at 距今超 3 天）
+        before = len(self.data["tasks"])
+        self.data["tasks"] = [t for t in self.data["tasks"]
+                               if not (t.get("type") == "once" and t.get("fired")
+                                       and self._older_than(t.get("at"), now, 3))]
+        removed += before - len(self.data["tasks"])
+        # 2) 已触发的定时提醒（at 距今超 3 天）
+        before = len(self.data["timers"])
+        self.data["timers"] = [t for t in self.data["timers"]
+                                if not (t.get("fired")
+                                        and self._older_than(t.get("at"), now, 3))]
+        removed += before - len(self.data["timers"])
+        # 3) 完成超 7 天的待办（有 done_ts 才算；旧数据无完成时间保守保留）
+        before = len(self.data["todos"])
+        self.data["todos"] = [t for t in self.data["todos"]
+                               if not (t.get("done") and t.get("done_ts")
+                                       and self._older_than(t["done_ts"], now, 7))]
+        removed += before - len(self.data["todos"])
+        if removed:
+            self.save()
+            print("[管家] 清理过期数据 %d 条" % removed)
+        return removed
+
+    @staticmethod
+    def _older_than(ts_str, now, days):
+        """时间字符串（YYYY-MM-DD HH:MM）是否早于 now-days 天。"""
+        if not ts_str:
+            return False
+        try:
+            ts = datetime.datetime.strptime(ts_str.strip(), "%Y-%m-%d %H:%M")
+        except ValueError:
+            return False
+        return ts <= now - datetime.timedelta(days=days)
+
     def _add_todo(self, t, ds):
         now = datetime.datetime.now()
         prompt = (EXTRACT_TODO.replace("{date}", now.strftime("%Y年%m月%d日"))
@@ -558,6 +599,7 @@ class LifeManager:
         hits = [t for t in active if kw in t["text"] or t["text"] in kw]
         if len(hits) == 1:
             hits[0]["done"] = True
+            hits[0]["done_ts"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")  # 完成时间（睡前总结/清理用）
             self.save()
             print("[管家] 完成待办：%s" % hits[0]["text"])
             return ("（内部消息：用户说「%s」办完了，你已把待办「%s」划掉。"

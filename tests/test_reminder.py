@@ -274,6 +274,103 @@ def test_task_weather_action_fallback_to_text(tmp_path):
     assert "查天气" in push.sent[0]
 
 
+# ---------- 节日倒计时 / 睡前总结 / 数据清理 ----------
+
+def test_digest_has_countdown(tmp_path):
+    """晨报包含未来节日倒计时（用真实农历：2026-08-06 之后的最近节日）。"""
+    rm, _ = _make_rm(tmp_path, push=FakePush(), due=[])
+    text = rm.build_digest(datetime.datetime(2026, 8, 6, 8, 0))
+    assert "还有" in text and "天" in text
+
+
+def test_next_festival_finds_recent(tmp_path):
+    """倒计时能算出未来 90 天内最近的节日及天数。"""
+    rm, _ = _make_rm(tmp_path, push=FakePush(), due=[])
+    f = rm._next_festival(datetime.datetime(2026, 8, 6, 8, 0))
+    assert f is not None
+    name, date, delta = f
+    assert 0 < delta <= 90
+    assert date > datetime.date(2026, 8, 6)
+
+
+def test_next_lunar_festival_mid_autumn(tmp_path):
+    """2026 年 8 月 6 日之后最近的农历节日是七夕（8/19）。"""
+    try:
+        from zhdate import ZhDate  # noqa: F401
+    except ImportError:
+        import pytest
+        pytest.skip("需要 zhdate")
+    rm, _ = _make_rm(tmp_path, push=FakePush(), due=[])
+    f = rm._next_lunar_festival(datetime.datetime(2026, 8, 6, 8, 0))
+    assert f is not None and f[0] == "七夕"
+
+
+def test_build_summary_empty(tmp_path):
+    rm, mgr = _make_rm(tmp_path, push=FakePush(), due=[])
+    text = rm.build_summary(datetime.datetime(2026, 8, 6, 22, 0))
+    assert "没有留下记录" in text
+
+
+def test_build_summary_counts_today(tmp_path):
+    rm, mgr = _make_rm(tmp_path, push=FakePush(), due=[])
+    mgr.data["todos"] = [
+        {"text": "交房租", "done": True, "done_ts": "2026-08-06 10:00"},
+        {"text": "买牛奶", "done": True, "done_ts": "2026-08-05 10:00"},  # 昨天的不算
+        {"text": "没做完", "done": False},
+    ]
+    mgr.data["memos"] = [
+        {"text": "地址", "ts": int(datetime.datetime(2026, 8, 6, 12, 0).timestamp())},
+        {"text": "旧备忘", "ts": int(datetime.datetime(2026, 7, 1, 12, 0).timestamp())},
+    ]
+    text = rm.build_summary(datetime.datetime(2026, 8, 6, 22, 0))
+    assert "交房租" in text and "买牛奶" not in text
+    assert "记了 1 条备忘" in text
+
+
+def test_summary_includes_expenses(tmp_path, monkeypatch):
+    """今天有记账 → 总结里带支出。"""
+    import tools
+    monkeypatch.setattr(tools, "EXPENSES_PATH", str(tmp_path / "expenses.json"))
+    tools._save_expenses({"items": [
+        {"amount": 35, "category": "吃饭", "note": "午餐", "date": "2026-08-06"},
+        {"amount": 12, "category": "交通", "note": "地铁", "date": "2026-08-06"},
+        {"amount": 99, "category": "购物", "note": "昨天", "date": "2026-08-05"},
+    ]})
+    rm, mgr = _make_rm(tmp_path, push=FakePush(), due=[])
+    text = rm.build_summary(datetime.datetime(2026, 8, 6, 22, 0))
+    assert "今天花了 47 元" in text and "吃饭" in text
+
+
+def test_maybe_send_summary_once_per_day(tmp_path):
+    push = FakePush()
+    rm, _ = _make_rm(tmp_path, push=push)
+    assert rm.maybe_send_summary(datetime.datetime(2026, 8, 6, 22, 0)) is True
+    assert rm.maybe_send_summary(datetime.datetime(2026, 8, 6, 22, 1)) is False  # 当天不重复
+    assert rm.maybe_send_summary(datetime.datetime(2026, 8, 6, 21, 59)) is False  # 没到点
+
+
+def test_maybe_cleanup_removes_stale(tmp_path):
+    rm, mgr = _make_rm(tmp_path, push=FakePush(), due=[])
+    mgr.data["tasks"] = [
+        {"type": "once", "at": "2026-08-01 10:00", "fired": True, "last_fired": ""},  # 超 3 天
+        {"type": "daily", "time": "09:00", "fired": False, "last_fired": "2026-08-06"},  # 保留
+    ]
+    mgr.data["timers"] = [
+        {"at": "2026-08-01 10:00", "fired": True},   # 超 3 天
+        {"at": "2026-08-06 15:00", "fired": False},  # 保留
+    ]
+    mgr.data["todos"] = [
+        {"text": "老完成", "done": True, "done_ts": "2026-07-01 10:00"},   # 超 7 天
+        {"text": "新完成", "done": True, "done_ts": "2026-08-05 10:00"},   # 保留
+        {"text": "没完成", "done": False},
+    ]
+    assert mgr.cleanup_old_data(datetime.datetime(2026, 8, 6, 12, 0)) == 3
+    assert len(mgr.data["tasks"]) == 1 and len(mgr.data["timers"]) == 1
+    assert len(mgr.data["todos"]) == 2
+    assert all(not (t.get("done") and t.get("done_ts") == "2026-07-01 10:00")
+               for t in mgr.data["todos"])
+
+
 # ---------- 定时提醒（上下班打卡） ----------
 
 def _cfg_with_clock(extra=None):
