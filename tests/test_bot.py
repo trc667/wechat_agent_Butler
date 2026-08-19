@@ -94,7 +94,7 @@ def test_music_now_reply(monkeypatch):
 
 
 def test_music_now_sends_cover_image(monkeypatch):
-    """有专辑封面且支持发图 → 先发封面图再发链接文本。"""
+    """有专辑封面且支持发图 → 发封面(caption=歌名) + URL 单独一条。"""
     from bot import XiaoQiBot
 
     images = []
@@ -105,10 +105,11 @@ def test_music_now_sends_cover_image(monkeypatch):
                  "image": b"cover-bytes"})
     b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
                   send=lambda s, t: sent.append((s, t)),
-                  send_image=lambda s, img, caption=None: images.append((s, img)))
+                  send_image=lambda s, img, caption=None: images.append((s, img, caption)))
     b._reply_worker("wxid", "来首歌")
-    assert images == [("wxid", b"cover-bytes")]  # 封面已发
-    assert len(sent) == 1 and "失眠" in sent[0][1]  # 链接文本也发了
+    assert len(images) == 1 and images[0][1] == b"cover-bytes"
+    assert images[0][2] == "今日单曲：失眠 - Suki刘舒妤"  # caption 是歌名（不含 URL）
+    assert len(sent) == 1 and "music.163.com" in sent[0][1]  # URL 单独一条，歌名不重复
 
 
 def test_music_now_trigger_words(monkeypatch):

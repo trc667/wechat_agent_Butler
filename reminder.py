@@ -381,7 +381,12 @@ class ReminderManager:
                 except Exception:
                     m = None
                 if m and m.get("text"):
-                    self._send(m["text"], image=m.get("image"))
+                    # 歌名 + 封面图一条；URL 单独一条（纯链接消息更容易被微信识别为可点击）
+                    lines = [x.strip() for x in m["text"].split("\n") if x.strip()]
+                    title = lines[0] if lines else m["text"]
+                    self._send(title, image=m.get("image"))
+                    if len(lines) > 1:
+                        self._send(lines[1])
                     continue
             text = tk.get("text") or "定时任务"
             self._send("小管家提醒：%s 时间到" % text)

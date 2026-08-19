@@ -142,11 +142,16 @@ class XiaoQiBot:
         m = fetch_daily_song_full()
         if not m or not m.get("text"):
             return True, "网易云暂时没连上，稍后再试试"
-        # 有封面且支持发图：先发图（封面观感）再发链接文本
+        lines = [x.strip() for x in m["text"].split("\n") if x.strip()]
+        title = lines[0] if lines else m["text"]
+        url = lines[1] if len(lines) > 1 else ""
+        # 有封面且支持发图：发「歌名 + 封面图」，URL 单独一条（微信对纯链接消息更容易识别为可点击）
         if m.get("image") and self._send_image is not None:
             try:
-                self._send_image(sender, m["image"], caption=m["text"])
-                return True, m["text"]
+                self._send_image(sender, m["image"], caption=title)
+                if url:
+                    self._send(sender, url)
+                return True, ""  # 已自行发送，hint 置空避免重复
             except Exception:
                 pass  # 发图失败退回纯文本
         return True, m["text"]
@@ -404,8 +409,9 @@ class XiaoQiBot:
         if not handled:  # 不是管家命令，试试立即推一首单曲
             handled, hint = self._try_music_now(sender, text)
             if handled:
-                self._send(sender, hint)
-                self.mem.append_history("assistant", hint)
+                if hint:  # 已自行发送（封面+URL）时 hint 为空，不再重复发
+                    self._send(sender, hint)
+                    self.mem.append_history("assistant", hint)
                 return
         if not handled:  # 不是管家命令，试试新闻回看
             handled, hint = self._try_news_query(text)
