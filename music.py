@@ -7,6 +7,7 @@
 """
 
 import datetime
+import io
 
 import requests
 
@@ -54,8 +55,26 @@ def fetch_daily_song(timeout=8):
     return full["text"] if full else None
 
 
+def make_qrcode(url, size=6):
+    """把链接生成二维码 PNG bytes；失败返回 None。
+    微信里长按二维码图 → 识别图中二维码 → 打开播放页（链接文本不可点击的曲线方案）。"""
+    if not url:
+        return None
+    try:
+        import qrcode
+        qr = qrcode.QRCode(box_size=size, border=2)
+        qr.add_data(url)
+        qr.make(fit=True)
+        buf = io.BytesIO()
+        qr.make_image().save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
 def fetch_daily_song_full(timeout=8):
-    """抓网易云热歌榜，返回 {"text": 单曲文本, "image": 封面图 bytes 或 None}；失败返回 None。"""
+    """抓网易云热歌榜，返回 {"text": 单曲文本, "image": 封面图 bytes 或 None,
+    "qr": 播放链接二维码 PNG bytes 或 None}；失败返回 None。"""
     try:
         r = requests.get("https://music.163.com/api/playlist/detail?id=%d"
                          % HOT_PLAYLIST_ID, timeout=timeout,
@@ -75,7 +94,8 @@ def fetch_daily_song_full(timeout=8):
                 image = cr.content
             except Exception:
                 image = None  # 封面下载失败不影响文本推送
-        return {"text": text, "image": image}
+        return {"text": text, "image": image, "qr": make_qrcode(text.split(chr(10))[-1].strip())
+                if text else None}
     except Exception:
         return None
 

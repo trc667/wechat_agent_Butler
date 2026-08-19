@@ -285,11 +285,12 @@ def test_task_music_action_pushes_song(tmp_path):
                            "action": "music", "fired": False, "last_fired": ""}]
     rm._music_fn = lambda: {
         "text": "今日单曲：海屿你 - 马也_Crabbit\nhttps://music.163.com/song?id=1",
-        "image": b"cover-bytes"}
+        "image": b"cover-bytes", "qr": b"qr-bytes"}
     assert rm.check_due_tasks(datetime.datetime(2026, 8, 6, 7, 30)) == 1
     assert "海屿你" in push.sent[0]            # 第一条：歌名
-    assert "music.163.com" in push.sent[1]     # 第二条：URL 单独一条
-    assert push.images == [b"cover-bytes"]     # 封面图随歌名消息传出
+    assert "识别" in push.sent[1]              # 第二条：二维码提示
+    assert "music.163.com" in push.sent[2]     # 第三条：URL 单独一条
+    assert push.images == [b"cover-bytes", b"qr-bytes"]  # 封面 + 二维码
     assert "每日单曲" not in push.sent[0]      # 不是提醒文本
 
 

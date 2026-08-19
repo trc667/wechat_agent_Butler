@@ -94,7 +94,7 @@ def test_music_now_reply(monkeypatch):
 
 
 def test_music_now_sends_cover_image(monkeypatch):
-    """有专辑封面且支持发图 → 发封面(caption=歌名) + URL 单独一条。"""
+    """有封面/二维码且支持发图 → 发封面(caption=歌名) + 二维码 + URL 单独一条。"""
     from bot import XiaoQiBot
 
     images = []
@@ -102,13 +102,14 @@ def test_music_now_sends_cover_image(monkeypatch):
     monkeypatch.setattr(
         "music.fetch_daily_song_full",
         lambda: {"text": "今日单曲：失眠 - Suki刘舒妤\nhttps://music.163.com/song?id=273114",
-                 "image": b"cover-bytes"})
+                 "image": b"cover-bytes", "qr": b"qr-bytes"})
     b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
                   send=lambda s, t: sent.append((s, t)),
                   send_image=lambda s, img, caption=None: images.append((s, img, caption)))
     b._reply_worker("wxid", "来首歌")
-    assert len(images) == 1 and images[0][1] == b"cover-bytes"
-    assert images[0][2] == "今日单曲：失眠 - Suki刘舒妤"  # caption 是歌名（不含 URL）
+    assert len(images) == 2
+    assert images[0][1] == b"cover-bytes" and images[0][2] == "今日单曲：失眠 - Suki刘舒妤"
+    assert images[1][1] == b"qr-bytes" and "识别" in images[1][2]  # 二维码带提示
     assert len(sent) == 1 and "music.163.com" in sent[0][1]  # URL 单独一条，歌名不重复
 
 
@@ -146,6 +147,21 @@ def test_music_now_failure_gives_hint(monkeypatch):
     handled, hint = b._try_music_now("wxid", "推一首单曲")
     assert handled is True
     assert "没连上" in hint
+
+
+def test_music_now_plain_text_when_no_image_capability(monkeypatch):
+    """没注入 send_image（测试/降级场景）→ 退回纯文本。"""
+    from bot import XiaoQiBot
+
+    sent = []
+    monkeypatch.setattr(
+        "music.fetch_daily_song_full",
+        lambda: {"text": "今日单曲：失眠 - Suki刘舒妤\nhttps://music.163.com/song?id=273114",
+                 "image": b"cover", "qr": b"qr"})
+    b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: sent.append((s, t)))
+    b._reply_worker("wxid", "来首歌")
+    assert len(sent) == 1 and "失眠" in sent[0][1]  # 纯文本兜底
 
 
 def test_news_query_friday(monkeypatch):

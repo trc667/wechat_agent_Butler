@@ -145,10 +145,13 @@ class XiaoQiBot:
         lines = [x.strip() for x in m["text"].split("\n") if x.strip()]
         title = lines[0] if lines else m["text"]
         url = lines[1] if len(lines) > 1 else ""
-        # 有封面且支持发图：发「歌名 + 封面图」，URL 单独一条（微信对纯链接消息更容易识别为可点击）
-        if m.get("image") and self._send_image is not None:
+        # 有封面/二维码且支持发图：发「歌名+封面图」「长按识别二维码播放」，URL 单独一条可复制
+        if (m.get("image") or m.get("qr")) and self._send_image is not None:
             try:
-                self._send_image(sender, m["image"], caption=title)
+                if m.get("image"):
+                    self._send_image(sender, m["image"], caption=title)
+                if m.get("qr"):
+                    self._send_image(sender, m["qr"], caption="长按识别二维码打开播放")
                 if url:
                     self._send(sender, url)
                 return True, ""  # 已自行发送，hint 置空避免重复

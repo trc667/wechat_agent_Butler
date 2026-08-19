@@ -87,6 +87,14 @@ def test_fetch_full_includes_image(monkeypatch):
     full = music.fetch_daily_song_full()
     assert full is not None and full["text"]
     assert full["image"] == b"fake-cover-bytes"
+    assert full["qr"] is not None and full["qr"][:8] == b"\x89PNG\r\n\x1a\n"  # 二维码 PNG
+
+
+def test_make_qrcode():
+    qr = music.make_qrcode("https://music.163.com/song?id=1")
+    assert qr is not None and qr[:8] == b"\x89PNG\r\n\x1a\n"
+    assert music.make_qrcode("") is None
+    assert music.make_qrcode(None) is None
 
 
 def test_fetch_failure(monkeypatch):
