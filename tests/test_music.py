@@ -15,14 +15,15 @@ SAMPLE = {"result": {"tracks": [
 
 def _text(data, idx=0):
     parsed = music.parse_song(data, idx)
-    return parsed[0] if parsed else None
+    return parsed["text"] if parsed else None
 
 
 def test_parse_song_first():
-    text, cover = music.parse_song(SAMPLE, 0)
-    assert text is not None
+    parsed = music.parse_song(SAMPLE, 0)
+    assert parsed is not None
+    text, cover = parsed["text"], parsed["cover_url"]
     assert "海屿你" in text and "马也_Crabbit" in text
-    assert "https://music.163.com/song?id=1973665667" in text
+    assert parsed["song_id"] == 1973665667
     assert cover == "http://cover/1.jpg"
 
 
@@ -88,6 +89,36 @@ def test_fetch_full_includes_image(monkeypatch):
     assert full is not None and full["text"]
     assert full["image"] == b"fake-cover-bytes"
     assert full["qr"] is not None and full["qr"][:8] == b"\x89PNG\r\n\x1a\n"  # 二维码 PNG
+
+
+def test_fetch_full_appends_hot_comment(monkeypatch):
+    """有热评 → 追加「热评：」行。"""
+    class ListResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return SAMPLE
+
+    class CommentResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"hotComments": [{"content": "你走后，我一直失眠", "likedCount": 1}]}
+
+    def fake_get(url, *a, **k):
+        if "playlist" in url:
+            return ListResp()
+        if "comments" in url:
+            return CommentResp()
+        return ListResp()
+
+    monkeypatch.setattr(music.requests, "get", fake_get)
+    full = music.fetch_daily_song_full()
+    assert full is not None
+    assert "热评：你走后，我一直失眠" in full["text"]
+    assert "music.163.com/song?id=" not in full["text"]  # 链接已从文本移除
 
 
 def test_make_qrcode():

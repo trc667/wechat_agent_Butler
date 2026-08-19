@@ -26,8 +26,8 @@ _OFFSET_DAYS = 10
 
 
 def parse_song(data, index=0):
-    """从网易云歌单 detail 接口 JSON 里取第 index 首歌，返回 (text, cover_url)；失败返回 None。
-    纯函数，便于测试。"""
+    """从网易云歌单 detail 接口 JSON 里取第 index 首歌，
+    返回 {"text", "cover_url", "song_id"}；失败返回 None。纯函数，便于测试。"""
     try:
         tracks = data["result"]["tracks"]
         if not tracks:
@@ -45,8 +45,26 @@ def parse_song(data, index=0):
     if not name or not song_id:
         return None
     line = "%s - %s" % (name, artists) if artists else name
-    text = "今日单曲：%s\nhttps://music.163.com/song?id=%s" % (line, song_id)
-    return text, cover_url
+    return {"text": "今日单曲：%s" % line, "cover_url": cover_url,
+            "song_id": song_id}
+
+
+def fetch_hot_comment(song_id, timeout=8):
+    """拿歌曲第一条热评（网易云评论接口，免登录）。失败返回 None。"""
+    if not song_id:
+        return None
+    try:
+        r = requests.get("https://music.163.com/api/v1/resource/comments/"
+                         "R_SO_4_%d?limit=10&offset=0" % int(song_id),
+                         timeout=timeout, proxies=_NO_PROXY, headers=_HEADERS)
+        r.raise_for_status()
+        hot = (r.json().get("hotComments") or [])
+        if not hot:
+            return None
+        content = (hot[0].get("content") or "").strip()
+        return content or None
+    except Exception:
+        return None
 
 
 def fetch_daily_song(timeout=8):
@@ -73,7 +91,7 @@ def make_qrcode(url, size=6):
 
 
 def fetch_daily_song_full(timeout=8):
-    """抓网易云热歌榜，返回 {"text": 单曲文本, "image": 封面图 bytes 或 None,
+    """抓网易云热歌榜，返回 {"text": "今日单曲+热评", "image": 封面 bytes 或 None,
     "qr": 播放链接二维码 PNG bytes 或 None}；失败返回 None。"""
     try:
         r = requests.get("https://music.163.com/api/playlist/detail?id=%d"
@@ -84,7 +102,11 @@ def fetch_daily_song_full(timeout=8):
         parsed = parse_song(r.json(), index)
         if not parsed:
             return None
-        text, cover_url = parsed
+        text, cover_url, song_id = parsed["text"], parsed["cover_url"], parsed["song_id"]
+        # 热评（拿不到不影响推送）
+        comment = fetch_hot_comment(song_id, timeout=timeout)
+        if comment:
+            text += "\n热评：%s" % comment
         image = None
         if cover_url:
             try:
@@ -94,8 +116,8 @@ def fetch_daily_song_full(timeout=8):
                 image = cr.content
             except Exception:
                 image = None  # 封面下载失败不影响文本推送
-        return {"text": text, "image": image, "qr": make_qrcode(text.split(chr(10))[-1].strip())
-                if text else None}
+        play_url = "https://music.163.com/song?id=%s" % song_id
+        return {"text": text, "image": image, "qr": make_qrcode(play_url)}
     except Exception:
         return None
 

@@ -284,14 +284,14 @@ def test_task_music_action_pushes_song(tmp_path):
     mgr.data["tasks"] = [{"type": "daily", "time": "07:30", "text": "每日单曲",
                            "action": "music", "fired": False, "last_fired": ""}]
     rm._music_fn = lambda: {
-        "text": "今日单曲：海屿你 - 马也_Crabbit\nhttps://music.163.com/song?id=1",
+        "text": "今日单曲：海屿你 - 马也_Crabbit\n热评：你走后，我一直失眠",
         "image": b"cover-bytes", "qr": b"qr-bytes"}
     assert rm.check_due_tasks(datetime.datetime(2026, 8, 6, 7, 30)) == 1
-    assert "海屿你" in push.sent[0]            # 第一条：歌名
-    assert "识别" in push.sent[1]              # 第二条：二维码提示
-    assert "music.163.com" in push.sent[2]     # 第三条：URL 单独一条
+    assert push.sent[0] == ""                        # 封面图无文字
+    assert "海屿你" in push.sent[1] and "热评" in push.sent[1]  # 歌名+热评
+    assert "识别" in push.sent[2]                    # 二维码提示
     assert push.images == [b"cover-bytes", b"qr-bytes"]  # 封面 + 二维码
-    assert "每日单曲" not in push.sent[0]      # 不是提醒文本
+    assert "music.163.com" not in "".join(push.sent)  # 链接已移除
 
 
 def test_task_music_action_fallback_to_text(tmp_path):

@@ -94,23 +94,25 @@ def test_music_now_reply(monkeypatch):
 
 
 def test_music_now_sends_cover_image(monkeypatch):
-    """有封面/二维码且支持发图 → 发封面(caption=歌名) + 二维码 + URL 单独一条。"""
+    """有封面/二维码 → 发封面(无文字) + 文本(歌名+热评) + 二维码。"""
     from bot import XiaoQiBot
 
     images = []
     sent = []
     monkeypatch.setattr(
         "music.fetch_daily_song_full",
-        lambda: {"text": "今日单曲：失眠 - Suki刘舒妤\nhttps://music.163.com/song?id=273114",
+        lambda: {"text": "今日单曲：失眠 - Suki刘舒妤\n热评：你走后，我一直失眠",
                  "image": b"cover-bytes", "qr": b"qr-bytes"})
     b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
                   send=lambda s, t: sent.append((s, t)),
                   send_image=lambda s, img, caption=None: images.append((s, img, caption)))
     b._reply_worker("wxid", "来首歌")
     assert len(images) == 2
-    assert images[0][1] == b"cover-bytes" and images[0][2] == "今日单曲：失眠 - Suki刘舒妤"
+    assert images[0][1] == b"cover-bytes" and images[0][2] == ""  # 封面无文字
     assert images[1][1] == b"qr-bytes" and "识别" in images[1][2]  # 二维码带提示
-    assert len(sent) == 1 and "music.163.com" in sent[0][1]  # URL 单独一条，歌名不重复
+    assert len(sent) == 1
+    assert "失眠" in sent[0][1] and "热评：你走后，我一直失眠" in sent[0][1]
+    assert "music.163.com" not in sent[0][1]  # 链接已移除
 
 
 def test_music_now_trigger_words(monkeypatch):
@@ -156,12 +158,12 @@ def test_music_now_plain_text_when_no_image_capability(monkeypatch):
     sent = []
     monkeypatch.setattr(
         "music.fetch_daily_song_full",
-        lambda: {"text": "今日单曲：失眠 - Suki刘舒妤\nhttps://music.163.com/song?id=273114",
+        lambda: {"text": "今日单曲：失眠 - Suki刘舒妤\n热评：你走后，我一直失眠",
                  "image": b"cover", "qr": b"qr"})
     b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
                   send=lambda s, t: sent.append((s, t)))
     b._reply_worker("wxid", "来首歌")
-    assert len(sent) == 1 and "失眠" in sent[0][1]  # 纯文本兜底
+    assert len(sent) == 1 and "失眠" in sent[0][1] and "热评" in sent[0][1]  # 纯文本兜底
 
 
 def test_news_query_friday(monkeypatch):

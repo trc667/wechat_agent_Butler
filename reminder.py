@@ -381,14 +381,11 @@ class ReminderManager:
                 except Exception:
                     m = None
                 if m and m.get("text"):
-                    # 歌名+封面图一条；二维码一条（长按识别打开播放）；URL 单独一条可复制
-                    lines = [x.strip() for x in m["text"].split("\n") if x.strip()]
-                    title = lines[0] if lines else m["text"]
-                    self._send(title, image=m.get("image"))
+                    # 封面图（无文字）+ 「今日单曲+热评」文本 + 二维码（长按识别打开播放）
+                    self._send("", image=m.get("image"))
+                    self._send(m["text"])
                     if m.get("qr"):
                         self._send("长按识别二维码打开播放", image=m["qr"])
-                    if len(lines) > 1:
-                        self._send(lines[1])
                     continue
             text = tk.get("text") or "定时任务"
             self._send("小管家提醒：%s 时间到" % text)
