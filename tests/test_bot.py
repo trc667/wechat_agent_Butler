@@ -77,6 +77,55 @@ def test_weather_route_not_triggered_without_keyword(monkeypatch):
     assert handled is False
 
 
+def test_music_now_reply(monkeypatch):
+    """说「现在推一首每日单曲」→ 直接发单曲（不走模型，只回一条）。"""
+    from bot import XiaoQiBot
+
+    sent = []
+    monkeypatch.setattr(
+        "music.fetch_daily_song",
+        lambda: "今日单曲：失眠 - Suki刘舒妤\nhttps://music.163.com/song?id=273114")
+    b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: sent.append((s, t)))
+    b._reply_worker("wxid", "现在给我推送一首每日单曲")
+    assert len(sent) == 1
+    assert "失眠" in sent[0][1] and "music.163.com" in sent[0][1]
+
+
+def test_music_now_trigger_words(monkeypatch):
+    from bot import XiaoQiBot
+
+    b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: None)
+    monkeypatch.setattr("music.fetch_daily_song", lambda: "今日单曲：x")
+    for q in ["推一首单曲", "来首歌", "放首每日单曲", "推荐首歌", "现在给我推一首歌"]:
+        handled, _ = b._try_music_now(q)
+        assert handled is True, q
+
+
+def test_music_now_not_triggered_by_comment(monkeypatch):
+    """「这首歌很好听」这种普通聊天不触发。"""
+    from bot import XiaoQiBot
+
+    b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: None)
+    monkeypatch.setattr("music.fetch_daily_song", lambda: "今日单曲：x")
+    for q in ["这首歌很好听", "我喜欢这首歌", "你好呀"]:
+        handled, _ = b._try_music_now(q)
+        assert handled is False, q
+
+
+def test_music_now_failure_gives_hint(monkeypatch):
+    from bot import XiaoQiBot
+
+    b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: None)
+    monkeypatch.setattr("music.fetch_daily_song", lambda: None)
+    handled, hint = b._try_music_now("推一首单曲")
+    assert handled is True
+    assert "没连上" in hint
+
+
 def test_news_query_friday(monkeypatch):
     """说「看看周五的新闻」→ 返回最近周五的存档。"""
     from datetime import datetime, timedelta

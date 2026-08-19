@@ -129,6 +129,19 @@ class XiaoQiBot:
         except Exception:
             return None
 
+    def _try_music_now(self, text):
+        """立即推一首每日单曲：说「现在推一首单曲/来首歌」→ 抓网易云热歌榜直接发。
+        返回 (True, 回复文本) 表示命中；否则 (False, None)。"""
+        # 意图词开头（推/来/放/推荐/点）+ 目标词（单曲/首歌），避免误伤「这首歌很好听」
+        if not re.search(r"(推|来|放|推荐|点)[^，。！？]{0,4}(每日单曲|单曲|首歌)",
+                         text or ""):
+            return False, None
+        from music import fetch_daily_song
+        s = fetch_daily_song()
+        if not s:
+            return True, "网易云暂时没连上，稍后再试试"
+        return True, s
+
     def _news_line(self):
         """晨报附加科技/AI 新闻（抓失败返回 None，晨报照常发），并自动存档可回看。"""
         try:
@@ -379,6 +392,12 @@ class XiaoQiBot:
         if self._try_capabilities(sender, text):
             return
         handled, hint = self.mgr.handle(text, self.ds)
+        if not handled:  # 不是管家命令，试试立即推一首单曲
+            handled, hint = self._try_music_now(text)
+            if handled:
+                self._send(sender, hint)
+                self.mem.append_history("assistant", hint)
+                return
         if not handled:  # 不是管家命令，试试新闻回看
             handled, hint = self._try_news_query(text)
             if handled:
