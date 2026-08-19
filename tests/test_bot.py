@@ -111,6 +111,27 @@ def test_news_query_not_triggered(monkeypatch):
     assert handled is False
 
 
+def test_capabilities_reply(monkeypatch):
+    """「你能做什么」→ 输出能力清单（含快捷命令和工具列表）。"""
+    from bot import XiaoQiBot
+
+    sent = []
+    b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: sent.append((s, t)))
+    ok = b._try_capabilities("wxid", "你能做什么")
+    assert ok is True
+    assert sent and "快捷命令" in sent[0][1]
+    assert "memo_add" in sent[0][1] and "weather_query" in sent[0][1]
+
+
+def test_capabilities_not_triggered_by_normal(monkeypatch):
+    from bot import XiaoQiBot
+
+    b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: None)
+    assert b._try_capabilities("wxid", "今天吃什么") is False
+
+
 def test_reply_worker_uses_tools(monkeypatch, tmp_path):
     """快路径未命中时走 Function Calling：模型调工具 → 数据真实落库。"""
     import os

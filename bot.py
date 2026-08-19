@@ -83,6 +83,34 @@ class XiaoQiBot:
 
     # ---------- 入口（主线程调用） ----------
 
+    def _capabilities_text(self):
+        """小管家能力自述：快捷命令（确定性秒回）+ 工具清单（动态从 TOOLS 生成）。"""
+        from tools import TOOLS
+        lines = ["我是小管家，能帮你做的事："]
+        lines.append("\n【快捷命令】（说这些最快，秒回）")
+        lines.append("记住XXX / 备忘录 / 忘掉XXX —— 备忘增查删（说错内容重说一遍即自动更新）")
+        lines.append("记一下XXX（可说日期）/ 我有哪些待办 / 完成了XXX —— 待办")
+        lines.append("X点提醒我XXX / 我有哪些提醒 / 取消X点的提醒 —— 定时提醒（到点微信推）")
+        lines.append("今天天气 / 明天天气 / 这周天气 —— 天气查询（默认深圳）")
+        lines.append("看新闻 / 周五的新闻 —— 科技/AI 新闻（每日自动存档可回看）")
+        lines.append("记一笔XXX花多少 / 这个月花了多少 —— 记账汇总")
+        lines.append("\n【对话中我还能自动帮你】（说人话就行，我会自己调工具）")
+        for t in TOOLS:
+            fn = t["function"]
+            lines.append("· %s —— %s" % (fn["name"], fn["description"]))
+        lines.append("\n试试对我说：「帮我记住测试环境地址，顺便记个待办明天交周报」")
+        return "\n".join(lines)
+
+    def _try_capabilities(self, sender, text):
+        """「你能做什么/你有什么功能/帮助」→ 输出能力清单。命中返回 True。"""
+        if not re.search(r"(你能做什么|你有什么功能|你会什么|你能干嘛|有什么功能|"
+                         r"介绍一下自己|帮助|help|会啥|能做啥)", (text or "").lower()):
+            return False
+        reply = self._capabilities_text()
+        self._send(sender, reply)
+        self.mem.append_history("assistant", reply)
+        return True
+
     def _weather_line(self):
         """晨报附加天气行：今日 + 明日（查失败返回 None，晨报照常发）。"""
         try:
@@ -336,6 +364,9 @@ class XiaoQiBot:
         self._rate_limit()
         # 图片识别确认（识别到清单后先问，用户回「记下」才入库）
         if self._handle_image_confirm(sender, text):
+            return
+        # 能力自述（你能做什么/帮助）
+        if self._try_capabilities(sender, text):
             return
         handled, hint = self.mgr.handle(text, self.ds)
         if not handled:  # 不是管家命令，试试新闻回看
