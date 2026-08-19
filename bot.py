@@ -63,7 +63,7 @@ class XiaoQiBot:
         self._user_msgs_since_extract = 0
         self._last_sender = None   # 最近私聊过的人（定时问候发给 ta）
         self._extract_lock = threading.Lock()
-        self.mgr = LifeManager()          # 备忘录/待办（manager.py）
+        self.mgr = LifeManager(cfg=cfg)          # 备忘录/待办（manager.py，带 cfg 供列系统定时项）
         self._pending_image = None        # 图片识别待确认：{kind, items, sender, ts}（防止误判自动入库）
         # Function Calling 工具上下文（tools.py：模型可自主调用备忘/待办/天气等）
         self._tool_ctx = None

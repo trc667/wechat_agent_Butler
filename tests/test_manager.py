@@ -305,6 +305,25 @@ def test_task_del_not_found(tmp_path):
     assert len(mgr.data["tasks"]) == 1
 
 
+def test_hint_tasks_includes_system_items(tmp_path):
+    """带 cfg 时，打卡提醒/晨报/天气预警/睡前总结也会列出来。"""
+    cfg = {
+        "clock_reminders": {"enabled": True, "times": [
+            {"time": "08:25", "text": "上班打卡"},
+            {"time": "18:00", "text": "下班打卡"}]},
+        "daily_greeting": {"enabled": True, "time": "08:00", "text": "早上好"},
+        "daily_summary": {"enabled": True, "time": "22:00"},
+        "weather_alert_time": "07:30",
+    }
+    mgr = LifeManager(os.path.join(str(tmp_path), "manager.json"), cfg=cfg)
+    handled, hint = mgr.handle("定时任务是哪些", None)
+    assert handled is True
+    assert "每天 08:25：打卡提醒" in hint
+    assert "每天 18:00：打卡提醒" in hint
+    assert "每日晨报" in hint and "睡前总结" in hint
+    assert "天气预警" in hint
+
+
 def test_route_empty_text(tmp_path):
     mgr = _make_mgr(tmp_path)
     handled, hint = mgr.handle("   ", FakeDS())

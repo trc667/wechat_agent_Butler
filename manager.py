@@ -93,8 +93,9 @@ def _ratio(a, b):
 class LifeManager:
     """备忘录/待办的存储与路由。handle() 返回 (handled, hint)。"""
 
-    def __init__(self, path=MANAGER_PATH):
+    def __init__(self, path=MANAGER_PATH, cfg=None):
         self.path = path
+        self.cfg = cfg or {}   # 可选：config 配置（列出系统定时项：打卡/晨报/预警/总结用）
         self.data = copy.deepcopy(EMPTY)  # 深拷贝：避免多实例共享同一份列表
         self._load()
 
@@ -472,19 +473,35 @@ class LifeManager:
         return "%s 的一次性任务" % task.get("at")
 
     def _hint_tasks(self):
-        """列出所有定时任务（含循环任务和未触发的一次性任务），带具体内容和动作。"""
+        """列出所有定时任务（含循环任务和未触发的一次性任务），带具体内容和动作；
+        配置了 cfg 时还会追加系统定时项（打卡/晨报/天气预警/睡前总结）。"""
         active = [t for t in self.data["tasks"]
                   if t.get("type") != "once" or not t.get("fired")]
-        if not active:
-            return ("（内部消息：用户查定时任务，目前一个都没有。"
-                    "简短告诉他现在没有定时任务。）")
         items = []
         for t in active:
             action = {"weather": "推天气", "music": "推单曲"}.get(t.get("action"), "提醒")
             # 带上具体内容，否则模型只能看到时间看不到任务本身
             items.append("%s：%s（%s）" % (self._task_desc(t), t.get("text") or "?", action))
+        # 系统定时项（config 配置）：打卡提醒 / 每日晨报 / 天气预警 / 睡前总结
+        if self.cfg:
+            cr = self.cfg.get("clock_reminders") or {}
+            if cr.get("enabled", True):
+                for t in cr.get("times") or []:
+                    items.append("每天 %s：打卡提醒" % t.get("time"))
+            dg = self.cfg.get("daily_greeting") or {}
+            if dg.get("enabled", True):
+                items.append("每天 %s：每日晨报（问候+待办+天气+新闻）" % dg.get("time"))
+            ds = self.cfg.get("daily_summary") or {}
+            if ds.get("enabled", True):
+                items.append("每天 %s：睡前总结（今日完成+备忘+支出）" % ds.get("time"))
+            wa = (self.cfg.get("weather_alert_time") or "").strip()
+            if wa:
+                items.append("每天 %s：天气预警（有雨/高温才推）" % wa)
+        if not items:
+            return ("（内部消息：用户查定时任务，目前一个都没有。"
+                    "简短告诉他现在没有定时任务。）")
         return ("（内部消息：用户查定时任务，共%d条：%s。"
-                "简短像聊天一样列给他，不要用表格。）" % (len(active), "；".join(items)))
+                "简短像聊天一样列给他，不要用表格。）" % (len(items), "；".join(items)))
 
     def _del_task(self, kw):
         """「取消每天早上9点的天气推送」「删掉每周五的任务」→ 按内容/时间/规律匹配删除。"""
