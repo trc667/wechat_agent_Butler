@@ -130,6 +130,21 @@ class XiaoQiBot:
         except Exception:
             return None
 
+    def _hint_to_reply(self, hint):
+        """把查询类内部消息（如「共8条：XXX。简短像聊天一样列给他」）
+        转成用户可读的列表文本；非查询类返回 None（走模型）。"""
+        m = re.search(r"共\d+条：(.+?)。", hint or "")
+        if not m:
+            return None
+        items = m.group(1).strip()
+        if not items:
+            return None
+        # 前缀按查询对象区分
+        prefix = "你的定时任务：" if "定时任务" in hint else ("你的备忘录：" if "备忘录" in hint
+                                                      else ("你的待办：" if "待办" in hint
+                                                            else "你的提醒："))
+        return prefix + items
+
     def _try_music_now(self, sender, text):
         """立即推一首每日单曲：说「现在推一首单曲/来首歌」→ 抓网易云热歌榜直接发。
         有专辑封面且支持发图时先发封面图再发链接文本（观感接近卡片）。
@@ -405,6 +420,14 @@ class XiaoQiBot:
         if self._try_capabilities(sender, text):
             return
         handled, hint = self.mgr.handle(text, self.ds)
+        if handled and hint:
+            # 查询类（查任务/备忘/待办/提醒）：确定性直接回复，不走模型
+            # （模型曾把「内部消息」查询结果答成「没有记录」，直接回复最可靠）
+            reply = self._hint_to_reply(hint)
+            if reply:
+                self._send(sender, reply)
+                self.mem.append_history("assistant", reply)
+                return
         if not handled:  # 不是管家命令，试试立即推一首单曲
             handled, hint = self._try_music_now(sender, text)
             if handled:

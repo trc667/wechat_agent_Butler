@@ -77,6 +77,43 @@ def test_weather_route_not_triggered_without_keyword(monkeypatch):
     assert handled is False
 
 
+def test_hint_to_reply_tasks():
+    """查询类内部消息转用户可读文本；操作类不转（走模型）。"""
+    from bot import XiaoQiBot
+
+    b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: None)
+    reply = b._hint_to_reply(
+        "（内部消息：用户查定时任务，共2条：每天 09:00 的定时任务：每日单曲（推单曲）；"
+        "每天 08:25：打卡提醒。简短像聊天一样列给他，不要用表格。）")
+    assert reply and "你的定时任务：" in reply and "每日单曲" in reply
+    assert b._hint_to_reply(
+        "（内部消息：用户刚让你记住：xxx。简短确认一句。）") is None  # 操作类走模型
+
+
+def test_query_tasks_direct_reply(monkeypatch, tmp_path):
+    """「我有哪些定时任务」→ 确定性直接回复列表，不走模型（ds=None 不崩即证明）。"""
+    import os
+    from bot import XiaoQiBot
+    from manager import LifeManager
+
+    sent = []
+    cfg = {"min_reply_interval": 0,
+           "clock_reminders": {"enabled": True, "times": [
+               {"time": "08:25", "text": "上班打卡"}]},
+           "daily_greeting": {"enabled": True, "time": "08:00", "text": "早上好"},
+           "daily_summary": {"enabled": True, "time": "22:00"},
+           "weather_alert_time": "07:30"}
+    mgr = LifeManager(os.path.join(str(tmp_path), "manager.json"), cfg=cfg)
+    mgr.add_task_direct("daily", "每日单曲", time="09:00", action="music")
+    b = XiaoQiBot(None, FakeMem(), cfg, send=lambda s, t: sent.append((s, t)))
+    b.mgr = mgr
+    b._reply_worker("wxid", "我有哪些定时任务")
+    assert len(sent) == 1
+    assert "每日单曲" in sent[0][1] and "打卡" in sent[0][1]
+    assert "你的定时任务" in sent[0][1]
+
+
 def test_music_now_reply(monkeypatch):
     """说「现在推一首每日单曲」→ 直接发单曲（不走模型，只回一条）。"""
     from bot import XiaoQiBot
