@@ -109,7 +109,7 @@ def test_music_now_sends_cover_image(monkeypatch):
     b._reply_worker("wxid", "来首歌")
     assert len(images) == 2
     assert images[0][1] == b"cover-bytes" and images[0][2] == ""  # 封面无文字
-    assert images[1][1] == b"qr-bytes" and "识别" in images[1][2]  # 二维码带提示
+    assert images[1][1] == b"qr-bytes" and images[1][2] == ""    # 二维码保留、无提示文字
     assert len(sent) == 1
     assert "失眠" in sent[0][1] and "热评：你走后，我一直失眠" in sent[0][1]
     assert "music.163.com" not in sent[0][1]  # 链接已移除

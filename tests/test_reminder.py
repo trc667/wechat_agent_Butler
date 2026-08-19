@@ -289,7 +289,7 @@ def test_task_music_action_pushes_song(tmp_path):
     assert rm.check_due_tasks(datetime.datetime(2026, 8, 6, 7, 30)) == 1
     assert push.sent[0] == ""                        # 封面图无文字
     assert "海屿你" in push.sent[1] and "热评" in push.sent[1]  # 歌名+热评
-    assert "识别" in push.sent[2]                    # 二维码提示
+    assert push.sent[2] == ""                        # 二维码保留、无提示文字
     assert push.images == [b"cover-bytes", b"qr-bytes"]  # 封面 + 二维码
     assert "music.163.com" not in "".join(push.sent)  # 链接已移除
 

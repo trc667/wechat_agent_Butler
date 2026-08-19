@@ -142,14 +142,14 @@ class XiaoQiBot:
         m = fetch_daily_song_full()
         if not m or not m.get("text"):
             return True, "网易云暂时没连上，稍后再试试"
-        # 有封面/二维码且支持发图：封面图 + 「今日单曲+热评」文本 + 二维码（长按识别打开播放）
+        # 有封面/二维码且支持发图：封面图 + 「今日单曲+热评」文本 + 二维码图（均不带文字）
         if (m.get("image") or m.get("qr")) and self._send_image is not None:
             try:
                 if m.get("image"):
                     self._send_image(sender, m["image"], caption="")
                 self._send(sender, m["text"])
                 if m.get("qr"):
-                    self._send_image(sender, m["qr"], caption="长按识别二维码打开播放")
+                    self._send_image(sender, m["qr"], caption="")
                 return True, ""  # 已自行发送，hint 置空避免重复
             except Exception:
                 pass  # 发图失败退回纯文本
