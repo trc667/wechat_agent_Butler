@@ -145,6 +145,33 @@ class XiaoQiBot:
                                                             else "你的提醒："))
         return prefix + items
 
+    def _try_douyin_summary(self, sender, text):
+        """抖音视频总结：识别分享链接 → 先回「正在解析」→ 异步下载转写总结。
+        命中返回 True（已自行发送确认消息）。"""
+        if not re.search(r"(v\.douyin\.com|douyin\.com|抖音)", text or ""):
+            return False
+        from video import extract_url
+        if not extract_url(text):
+            return False
+        self._send(sender, "收到，正在解析视频，稍等一下~")
+        threading.Thread(target=self._douyin_worker, args=(sender, text),
+                         daemon=True).start()
+        return True
+
+    def _douyin_worker(self, sender, text):
+        """后台线程：下载 → 转写 → 总结 → 发送。任一步失败给友好提示。"""
+        try:
+            from video import summarize_douyin_link
+            reply = summarize_douyin_link(text)
+        except Exception as e:
+            print("[错误] 视频解析异常: %s" % e)
+            reply = None
+        if not reply:
+            reply = ("视频解析失败了：可能是链接失效、抖音反爬限制，"
+                     "或视频太长。换个链接再试试")
+        self._send(sender, reply)
+        self.mem.append_history("assistant", reply)
+
     def _try_music_now(self, sender, text):
         """立即推一首每日单曲：说「现在推一首单曲/来首歌」→ 抓网易云热歌榜直接发。
         有专辑封面且支持发图时先发封面图再发链接文本（观感接近卡片）。
@@ -427,6 +454,10 @@ class XiaoQiBot:
             if reply:
                 self._send(sender, reply)
                 self.mem.append_history("assistant", reply)
+                return
+        if not handled:  # 不是管家命令，试试抖音视频总结
+            handled = self._try_douyin_summary(sender, text)
+            if handled:
                 return
         if not handled:  # 不是管家命令，试试立即推一首单曲
             handled, hint = self._try_music_now(sender, text)

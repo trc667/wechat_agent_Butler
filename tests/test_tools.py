@@ -119,7 +119,12 @@ def test_news_query_today(monkeypatch, tmp_path):
 
 def test_news_query_history_day(monkeypatch, tmp_path):
     ctx, _ = _make_ctx(tmp_path)
-    monkeypatch.setattr("news.load_history", lambda: {"2026-08-14": "周五新闻存档"})
+    # 用动态日期：mock 的存档日期 = 今天往前推到的最近周五（与代码逻辑一致）
+    import datetime as _dt
+    today = _dt.date.today()
+    last_fri = (today - _dt.timedelta(days=(today.weekday() - 4) % 7))
+    monkeypatch.setattr("news.load_history",
+                        lambda: {last_fri.strftime("%Y-%m-%d"): "周五新闻存档"})
     out = tools.dispatch("news_query", {"day": "周五"}, ctx)
     assert "周五新闻存档" in out
 

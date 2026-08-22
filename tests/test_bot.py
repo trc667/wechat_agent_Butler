@@ -114,10 +114,48 @@ def test_query_tasks_direct_reply(monkeypatch, tmp_path):
     assert "你的定时任务" in sent[0][1]
 
 
+def test_douyin_summary_route(monkeypatch):
+    """发抖音链接 → 先回确认 + 异步线程处理（不阻塞回复）。"""
+    from bot import XiaoQiBot
+
+    sent = []
+    started = []
+    monkeypatch.setattr(
+        "bot.threading.Thread",
+        lambda target=None, args=(), daemon=None: started.append(args) or type(
+            "T", (), {"start": lambda self: None})())
+    b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: sent.append((s, t)))
+    ok = b._try_douyin_summary("wxid", "看看这个视频 https://v.douyin.com/abc/")
+    assert ok is True
+    assert sent and "正在解析" in sent[0][1]
+    assert len(started) == 1 and started[0][0] == "wxid"  # 异步线程带 sender
+
+
+def test_douyin_summary_not_triggered(monkeypatch):
+    from bot import XiaoQiBot
+
+    b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: None)
+    assert b._try_douyin_summary("wxid", "今天天气怎么样") is False
+    assert b._try_douyin_summary("wxid", "看我发的这个 https://example.com/x") is False
+
+
+def test_douyin_worker_failure_sends_friendly(monkeypatch):
+    """解析失败 → 发友好提示（不报错）。"""
+    from bot import XiaoQiBot
+
+    sent = []
+    monkeypatch.setattr("video.summarize_douyin_link", lambda text: None)
+    b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: sent.append((s, t)))
+    b._douyin_worker("wxid", "https://v.douyin.com/abc/")
+    assert len(sent) == 1 and "失败" in sent[0][1]
+
+
 def test_music_now_reply(monkeypatch):
     """说「现在推一首每日单曲」→ 直接发单曲（不走模型，只回一条）。"""
     from bot import XiaoQiBot
-
     sent = []
     monkeypatch.setattr(
         "music.fetch_daily_song_full",
