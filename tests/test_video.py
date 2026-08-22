@@ -36,34 +36,24 @@ def test_extract_url_picks_douyin_not_other():
 
 # ---------- 下载 ----------
 
-def test_download_video_success(monkeypatch, tmp_path):
-    class FakeYDL:
-        def __init__(self, opts):
-            self.opts = opts
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def extract_info(self, url, download=True):
-            return {"id": "vid123"}
-
-        def prepare_filename(self, info):
-            return str(tmp_path / "vid123.mp4")
-
-    monkeypatch.setattr("yt_dlp.YoutubeDL", FakeYDL)
-    # 伪造下载产物
-    target = tmp_path / "vid123.mp4"
+def test_download_video_playwright_first(monkeypatch, tmp_path):
+    """优先 Playwright 下载（抖音需要浏览器签名）。"""
+    target = tmp_path / "pw.mp4"
     target.write_bytes(b"fake-video")
+    monkeypatch.setattr("douyin_dl.download_douyin_video",
+                        lambda url, out_dir: str(target))
+    assert video.download_video("https://v.douyin.com/abc/",
+                                out_dir=str(tmp_path)) == str(target)
 
-    path = video.download_video("https://v.douyin.com/abc/", out_dir=str(tmp_path))
-    assert path == str(target)
 
+def test_download_video_fallback_ytdlp(monkeypatch, tmp_path):
+    """Playwright 失败 → 回退 yt-dlp。"""
+    target = tmp_path / "yt.mp4"
+    target.write_bytes(b"fake-video")
+    monkeypatch.setattr("douyin_dl.download_douyin_video",
+                        lambda url, out_dir: None)
 
-def test_download_video_failure(monkeypatch, tmp_path):
-    class BoomYDL:
+    class FakeYDL:
         def __init__(self, opts):
             pass
 
@@ -74,23 +64,24 @@ def test_download_video_failure(monkeypatch, tmp_path):
             return False
 
         def extract_info(self, url, download=True):
-            raise RuntimeError("反爬拦截")
+            return {"id": "vid"}
 
         def prepare_filename(self, info):
-            return str(tmp_path / "x.mp4")
+            return str(target)
 
-    monkeypatch.setattr("yt_dlp.YoutubeDL", BoomYDL)
+    monkeypatch.setattr("yt_dlp.YoutubeDL", FakeYDL)
+    assert video.download_video("https://example.com/v",
+                                out_dir=str(tmp_path)) == str(target)
+
+
+def test_download_video_all_fail(monkeypatch, tmp_path):
+    """两条路都失败 → None。"""
+    monkeypatch.setattr("douyin_dl.download_douyin_video",
+                        lambda url, out_dir: None)
+    monkeypatch.setattr("yt_dlp.YoutubeDL",
+                        lambda opts: (_ for _ in ()).throw(RuntimeError("反爬")))
     assert video.download_video("https://v.douyin.com/abc/",
                                 out_dir=str(tmp_path)) is None
-
-
-def test_download_video_no_ytdlp(monkeypatch, tmp_path):
-    monkeypatch.setitem(__import__("sys").modules, "yt_dlp", None)
-    import importlib
-    importlib.reload(video)
-    assert video.download_video("https://v.douyin.com/abc/",
-                                out_dir=str(tmp_path)) is None
-    importlib.reload(video)  # 恢复
 
 
 # ---------- 音频提取 ----------

@@ -54,7 +54,20 @@ def extract_url(text):
 
 
 def download_video(url, out_dir=VIDEO_DIR, timeout=90):
-    """yt-dlp 下载视频（优先无水印），返回本地 mp4 路径；失败返回 None。"""
+    """下载视频（优先 Playwright 真实浏览器，失败回退 yt-dlp），
+    返回本地 mp4 路径；失败返回 None。
+
+    抖音 2026 年网页需要浏览器 JS 签名（__ac_signature），yt-dlp 无法绕过，
+    必须用 Playwright 真实浏览器内核打开页面拦截真实视频地址。"""
+    from douyin_dl import download_douyin_video
+    path = download_douyin_video(url, out_dir)
+    if path:
+        return path
+    return _download_via_ytdlp(url, out_dir, timeout)
+
+
+def _download_via_ytdlp(url, out_dir, timeout=90):
+    """yt-dlp 下载（通用平台兜底；抖音一般会被反爬拦截）。"""
     try:
         import yt_dlp
     except ImportError:
