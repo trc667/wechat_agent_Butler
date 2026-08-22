@@ -132,6 +132,50 @@ def test_douyin_summary_route(monkeypatch):
     assert len(started) == 1 and started[0][0] == "wxid"  # 异步线程带 sender
 
 
+def test_douyin_login_route(monkeypatch):
+    """说「登录抖音」→ 触发扫码登录（异步线程 + 确认消息）。"""
+    from bot import XiaoQiBot
+
+    sent = []
+    started = []
+    monkeypatch.setattr(
+        "bot.threading.Thread",
+        lambda target=None, args=(), daemon=None: started.append(args) or type(
+            "T", (), {"start": lambda self: None})())
+    b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: sent.append((s, t)))
+    assert b._try_douyin_login("wxid", "登录抖音") is True
+    assert b._try_douyin_login("wxid", "今天天气怎么样") is False
+    assert sent and "登录页" in sent[0][1]
+    assert len(started) == 1
+
+
+def test_douyin_login_worker_success(monkeypatch):
+    """扫码成功 → 发成功提示。"""
+    from bot import XiaoQiBot
+
+    sent = []
+    monkeypatch.setattr("douyin_dl.login_douyin",
+                        lambda on_qrcode=None, timeout=180: True)
+    b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: sent.append((s, t)))
+    b._douyin_login_worker("wxid")
+    assert sent and "登录成功" in sent[0][1]
+
+
+def test_douyin_login_worker_fail(monkeypatch):
+    """扫码超时 → 提示重试。"""
+    from bot import XiaoQiBot
+
+    sent = []
+    monkeypatch.setattr("douyin_dl.login_douyin",
+                        lambda on_qrcode=None, timeout=180: False)
+    b = XiaoQiBot(None, FakeMem(), {"min_reply_interval": 0},
+                  send=lambda s, t: sent.append((s, t)))
+    b._douyin_login_worker("wxid")
+    assert sent and "超时" in sent[0][1]
+
+
 def test_douyin_summary_not_triggered(monkeypatch):
     from bot import XiaoQiBot
 

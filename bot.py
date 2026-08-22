@@ -145,6 +145,40 @@ class XiaoQiBot:
                                                             else "你的提醒："))
         return prefix + items
 
+    def _try_douyin_login(self, sender, text):
+        """「登录抖音」→ 触发扫码登录流程（二维码截图发微信，用户手机扫码）。"""
+        if not re.search(r"(登录抖音|抖音登录|扫码登录|抖音扫码)", text or ""):
+            return False
+        self._send(sender, "好的，正在打开抖音登录页，二维码马上发过来~")
+        threading.Thread(target=self._douyin_login_worker, args=(sender,),
+                         daemon=True).start()
+        return True
+
+    def _douyin_login_worker(self, sender):
+        """后台线程：抖音扫码登录（二维码图片发微信，成功后保存登录态）。"""
+        from douyin_dl import login_douyin
+
+        def on_qr(png):
+            try:
+                if self._send_image:
+                    self._send_image(sender, png,
+                                     caption="抖音扫码登录：打开手机抖音扫一扫（12秒后自动刷新）")
+                else:
+                    with open("data/douyin_qr.png", "wb") as f:
+                        f.write(png)
+            except Exception as e:
+                print("[错误] 发二维码失败: %s" % e)
+
+        try:
+            ok = login_douyin(on_qrcode=on_qr, timeout=180)
+        except Exception as e:
+            print("[错误] 登录流程异常: %s" % e)
+            ok = False
+        if ok:
+            self._send(sender, "抖音登录成功！现在发抖音视频链接给我就能自动解析总结了")
+        else:
+            self._send(sender, "抖音登录超时或失败，想再试就说「登录抖音」")
+
     def _try_douyin_summary(self, sender, text):
         """抖音视频总结：识别分享链接 → 先回「正在解析」→ 异步下载转写总结。
         命中返回 True（已自行发送确认消息）。"""
@@ -454,6 +488,10 @@ class XiaoQiBot:
             if reply:
                 self._send(sender, reply)
                 self.mem.append_history("assistant", reply)
+                return
+        if not handled:  # 不是管家命令，试试抖音登录（扫码）
+            handled = self._try_douyin_login(sender, text)
+            if handled:
                 return
         if not handled:  # 不是管家命令，试试抖音视频总结
             handled = self._try_douyin_summary(sender, text)
