@@ -182,11 +182,11 @@ def test_summarize(monkeypatch):
 
         def chat(self, messages, **kw):
             self.seen = messages
-            return "一句话概括：讲了视频内容\n要点：\n1. 第一点"
+            return "一句话摘要：讲了视频内容\n主要内容：\n1. 第一点"
 
     ds = FakeDS()
     out = video.summarize("这是很长的转写文本内容", ds)
-    assert out and "一句话概括" in out
+    assert out and "一句话摘要" in out
     assert "这是很长的转写文本内容" in ds.seen[0]["content"]
 
 
