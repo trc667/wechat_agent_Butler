@@ -122,16 +122,85 @@ def _looks_video(url):
     return any(h in u for h in _VIDEO_HINTS)
 
 
+def _fetch_detail_via_page(page, aweme_id):
+    """在页面上下文里 fetch 抖音 detail API，拿真实视频地址。
+
+    关键：必须在页面内 fetch（带上登录态 cookie + 页面 JS 签名环境），
+    参数需模拟页面真实请求（带 version_code/webid 等），否则易被 WAF 拦截
+    （实测返回 "Blocked by..."）。返回 (play_url, play_url_h265) 或 (None, None)。
+    """
+    if not aweme_id:
+        return None, None
+    try:
+        result = page.evaluate("""async (id) => {
+            const ttwid = (document.cookie.match(/ttwid=([^;]+)/) || [])[1] || '';
+            const url = 'https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=' + id
+                + '&device_platform=webapp&aid=6383&channel=channel_pc_web&pc_client_type=1'
+                + '&version_code=190500&version_name=19.5.0&cookie_enabled=true'
+                + '&screen_width=1280&screen_height=800&browser_language=zh-CN'
+                + '&browser_platform=Win32&browser_name=Chrome&browser_version=130.0.0.0'
+                + '&browser_online=true&engine_name=Blink&os_name=Windows&os_version=10'
+                + '&cpu_core_num=8&device_memory=8&platform=PC&downlink=10&effective_type=4g'
+                + '&round_trip_time=50&webid=' + ttwid;
+            try {
+                const r = await fetch(url, {
+                    credentials: 'include',
+                    headers: {'referer': location.href},
+                });
+                const text = await r.text();
+                if (!text.startsWith('{')) return {error: 'blocked: ' + text.slice(0, 60)};
+                const j = JSON.parse(text);
+                if (j.status_code !== 0) return {error: 'status_code=' + j.status_code};
+                const v = (j.aweme_detail || {}).video || {};
+                const pick = (o) => ((o || {}).url_list || [])[0] || '';
+                return {
+                    play: pick(v.play_addr || v.play_addr_h264),
+                    play265: pick(v.play_addr_265),
+                };
+            } catch (e) { return {error: String(e).slice(0, 120)}; }
+        }""", aweme_id)
+        if not result or result.get("error"):
+            print("[douyin_dl] detail API 失败: %s" % (result or {}).get("error", ""))
+            return None, None
+        return result.get("play") or "", result.get("play265") or ""
+    except Exception as e:
+        print("[douyin_dl] detail API 异常: %s" % e)
+        return None, None
+
+
+def _download_from(url, headers, cookies, out_dir, tag=""):
+    """下载视频到 out_dir，返回路径；失败返回 None。"""
+    if not url:
+        return None
+    try:
+        r = requests.get(url, headers=headers, cookies=cookies,
+                         timeout=_DL_TIMEOUT, proxies=_NO_PROXY, stream=True)
+        r.raise_for_status()
+        path = os.path.join(out_dir, "douyin_%s%d.mp4" % (tag, int(time.time())))
+        with open(path, "wb") as f:
+            for chunk in r.iter_content(65536):
+                f.write(chunk)
+        if os.path.getsize(path) < 1024:  # 防空/损坏文件
+            os.remove(path)
+            return None
+        return path
+    except Exception as e:
+        print("[douyin_dl] 下载失败(%s): %s" % (tag or url[:50], e))
+        return None
+
+
 def download_douyin_video(url, out_dir, headless=True, state=None):
-    """Playwright 打开抖音视频页 → 拦截真实 mp4 → 下载到 out_dir。
+    """Playwright 打开抖音视频页 → 真实视频地址 → 下载到 out_dir。
     返回文件路径；失败返回 None。headless=False 时用有头模式（防检测）。
 
-    页面会同时加载多个视频流：优先选带音频的（playwm 带水印但有声音，
-    纯 hevc 流是无声画面），否则转写会没有内容。
+    主路径：页面内 fetch detail API 拿 play_addr（带音频无水印），
+    失败回退 play_addr_265（可能无声）。再回退网络请求拦截（防占位视频干扰）。
     state：登录态文件路径（扫码登录后保存），可显著降低风控。"""
     if state is None:
         state = _load_state()
-    candidates = []  # 收集所有视频 URL，按优先级排序
+    candidates = []  # 兜底：拦截到的视频 URL
+    headers = {"User-Agent": _UA, "Referer": "https://www.douyin.com/",
+               "Accept": "*/*"}
 
     try:
         p, browser, ctx, page = _launch_browser(headless=headless, state=state)
@@ -146,21 +215,35 @@ def download_douyin_video(url, out_dir, headless=True, state=None):
             try:
                 page.goto(url, timeout=_PAGE_TIMEOUT, wait_until="domcontentloaded")
             except Exception:
-                pass  # 页面可能跳转/超时，继续等视频请求
+                pass  # 页面可能跳转/超时，继续等
 
             # 页面可能弹验证码（风控）：有验证码就放弃
             try:
                 if page.locator("iframe[src*=captcha], [class*=captcha], [id*=captcha]").count() > 0:
                     print("[douyin_dl] 触发风控验证码，放弃")
-                    browser.close()
                     return None
             except Exception:
                 pass
 
-            # 等视频请求出现（页面自动播放会触发视频资源加载）
+            cookies = {c["name"]: c["value"] for c in ctx.cookies()}
+
+            # 主路径：从最终 URL 提取 aweme_id → detail API 拿真实地址 → 下载
+            import re as _re
+            m = _re.search(r"/video/(\d+)", page.url)
+            if m:
+                play, play265 = _fetch_detail_via_page(page, m.group(1))
+                if play:
+                    path = _download_from(play, headers, cookies, out_dir, tag="detail_")
+                    if path:
+                        return path
+                if play265:
+                    path = _download_from(play265, headers, cookies, out_dir, tag="detail265_")
+                    if path:
+                        return path
+
+            # 兜底：等视频请求 + performance 资源（排除 uuu_265 占位视频）
             deadline = time.time() + _GRAB_TIMEOUT
             while time.time() < deadline and not candidates:
-                # 每轮尝试触发播放：滚动 + 调用 video.play()（抖音懒加载/需交互才播）
                 try:
                     page.mouse.wheel(0, 600)
                     page.evaluate("""() => {
@@ -170,8 +253,6 @@ def download_douyin_video(url, out_dir, headless=True, state=None):
                 except Exception:
                     pass
                 page.wait_for_timeout(800)
-
-            # 备选：从 performance 资源列表找视频地址
             if not candidates:
                 try:
                     found = page.evaluate("""() => {
@@ -186,8 +267,6 @@ def download_douyin_video(url, out_dir, headless=True, state=None):
                         candidates.extend(found)
                 except Exception:
                     pass
-
-            cookies = {c["name"]: c["value"] for c in ctx.cookies()}
         finally:
             browser.close()
             p.stop()
@@ -199,7 +278,10 @@ def download_douyin_video(url, out_dir, headless=True, state=None):
         print("[douyin_dl] 未抓到视频地址")
         return None
 
-    # 优先级：playwm（带水印+音频）> 其他 mp4（可能无声）；去重保序
+    # 兜底下载：过滤掉抖音占位视频（uuu_265.mp4 是页面加载的通用资源，非用户视频）
+    def is_placeholder(u):
+        return "uuu_265" in u or "placeholder" in u.lower()
+
     def priority(u):
         u = u.lower()
         if "playwm" in u:
@@ -208,27 +290,9 @@ def download_douyin_video(url, out_dir, headless=True, state=None):
             return 1
         return 2
 
-    candidates.sort(key=priority)
-    # 优先尝试第一个（音频优先）；带 cookie + Referer 防盗链
-    headers = {
-        "User-Agent": _UA,
-        "Referer": "https://www.douyin.com/",
-        "Accept": "*/*",
-    }
-    for video_url in candidates[:3]:
-        try:
-            r = requests.get(video_url, headers=headers, cookies=cookies,
-                             timeout=_DL_TIMEOUT, proxies=_NO_PROXY, stream=True)
-            r.raise_for_status()
-            path = os.path.join(out_dir, "douyin_%d.mp4" % int(time.time()))
-            with open(path, "wb") as f:
-                for chunk in r.iter_content(65536):
-                    f.write(chunk)
-            if os.path.getsize(path) < 1024:  # 防空/损坏文件
-                os.remove(path)
-                continue
+    for video_url in sorted((u for u in candidates if not is_placeholder(u)),
+                            key=priority)[:3]:
+        path = _download_from(video_url, headers, cookies, out_dir, tag="grab_")
+        if path:
             return path
-        except Exception as e:
-            print("[douyin_dl] 下载失败(尝试下一个): %s" % e)
-            continue
     return None

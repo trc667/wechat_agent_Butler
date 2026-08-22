@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 
 import requests
 
@@ -174,12 +175,18 @@ def summarize(text, ds):
         "如果转写内容太碎片化，尽力归纳大意。\n\n"
         "转写文本：\n" + text[:3000]
     )
-    try:
-        reply = ds.chat([{"role": "user", "content": prompt}],
-                        temperature=0.3, max_tokens=500)
-        return reply.strip() if reply and reply.strip() else None
-    except Exception:
-        return None
+    # 网络抖动/限流会偶发失败，重试一次再放弃
+    for attempt in range(2):
+        try:
+            reply = ds.chat([{"role": "user", "content": prompt}],
+                            temperature=0.3, max_tokens=500)
+            if reply and reply.strip():
+                return reply.strip()
+        except Exception as e:
+            print("[video] 摘要失败(第%d次): %s" % (attempt + 1, e))
+        if attempt == 0:
+            time.sleep(1)
+    return None
 
 
 def _cleanup(files):
